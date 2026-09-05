@@ -17,6 +17,7 @@
   一度これで誤診している（2026-09-04）。os.chdir が要るのはそのため。
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -44,10 +45,36 @@ def _kana_fn():
         return None
 
 
+def romaji(segs, log) -> list[str]:
+    """★台本に残ったアルファベットを報告する（2026-09-05 nordw耳判定から）。
+
+    合成器は英字を**英語のg2p**に回すので、実測でこうなった:
+      `HOT LIMIT` → ho[cltoku]rosuri]miclto ＝「ホット**クロス**リミット」
+    ＝**存在しない語を喋る**。nordwの「なんて言ってるのか分かんない」の正体。
+
+    一次の防御はプロンプト（英字を書かず、カタカナ＋中黒で書け）。これは二次。
+    ⚠ **自動で直さない。** 読みを機械で決めると別の誤読を作る
+      （「ホットリミット」は中黒が無いと「ホッ/トリミット」に割れる、と実測済み）。
+      ★見つけて**知らせる**までが仕事。直すのは台本側。
+    ⚠ 止めもしない。1文字の誤検出で番組が飛ぶほうが損。
+    """
+    hits = []
+    for name, body in segs:
+        for m in re.finditer(r"[A-Za-z][A-Za-z0-9 .\-]*", body):
+            w = m.group().strip()
+            if len(w) < 2:
+                continue
+            hits.append(f"{name}: {w}")
+    for h in hits:
+        log.warning("★台本に英字が残っている（英語読みされて崩れる）: %s", h)
+    return hits
+
+
 def write(segs, outdir: Path, log) -> Path | None:
     """segs = [(名前, 台詞), ...]。失敗しても番組は止めない。"""
     cwd = os.getcwd()
     try:
+        romaji(segs, log)     # ★英字は g2p が要らないので先に見る
         kana = _kana_fn()
         if kana is None:
             log.info("読み検査: g2pが使えないので飛ばす（番組には影響しない）")

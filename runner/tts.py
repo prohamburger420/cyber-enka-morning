@@ -42,6 +42,7 @@ REF_DEFAULT = _REFS[""]
 REF_BY_CORNER = {k: v for k, v in _REFS.items() if k}
 
 _tts = None
+_warmed = False   # ★最初の1本を捨てたか
 
 
 def get_tts():
@@ -91,6 +92,23 @@ def synth(text: str, out_path: str, corner: str | None = None,
           f"speed={speed} split={SPLIT_METHOD} seed={SEED} parallel={PARALLEL_INFER}",
           flush=True)
     tts = get_tts()
+    # ★★プロセス内の最初の1本は捨てる（2026-09-05 実測）。
+    #   同じseed・parallel_infer=False でも**1回目だけ結果が違う**。
+    #     1回目 10.33秒 / 2回目 8.41秒 / 3回目 8.41秒（後2つはバイト一致）
+    #   捨て合成後は 0.25→8.41 / 0.35→8.51 / 0.50→8.66 と、間の差が素直に出る。
+    #   ⚠ これが無いと本番は **talk1（1本目）だけ別の土俵**で作られ、
+    #     A/B比較も「設定の差」でなく「1回目かどうか」を聴くことになる。
+    #   ★同じ経路で焼く。別の呼び方をするとウォームアップになっていない。
+    #   ⚠ 先にフラグを立てる（再帰で無限に潜らないため）。
+    global _warmed
+    if not _warmed:
+        _warmed = True
+        import tempfile
+        try:
+            synth("あ。", os.path.join(tempfile.gettempdir(), "kozue_warmup.wav"),
+                  corner=corner, speed=speed)
+        except Exception as e:     # 捨て合成が落ちても本番は止めない
+            print(f"  ⚠ ウォームアップに失敗（続行）: {e}", file=sys.stderr)
     sr, audio = next(tts.run({
         "text": _fix_yomi(text), "text_lang": "ja",
         "ref_audio_path": str(ref_wav), "prompt_text": ref_text, "prompt_lang": "ja",
