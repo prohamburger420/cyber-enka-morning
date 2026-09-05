@@ -1,0 +1,135 @@
+# 本番: 朝の番組を作ってR2へ置く（2026-09-05）
+#
+# パスA = 本編（放送前に作る）/ パスB = おたより（放送中、曲1が流れている間に作る）
+# いまは手動起動のみ。★放送時刻が未確定なので schedule はまだ入れない。
+name: morning
+on:
+  workflow_dispatch:
+    inputs:
+      pass:
+        description: "a=本編 / b=おたより"
+        required: true
+        default: "a"
+        type: choice
+        options: ["a", "b"]
+      no_audio:
+        description: "台本だけ作る（音声を作らない）"
+        type: boolean
+        default: false
+      warm_wait:
+        description: "パスB専用。準備を終えたあと、ここで指定した秒数だけ待ってから生成する"
+        required: false
+        default: "0"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GSV_DIR: ${{ github.workspace }}/gsv
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: GPT-SoVITS を取得（固定コミット）
+        run: |
+          git clone --depth 1 https://github.com/RVC-Boss/GPT-SoVITS.git gsv
+          cd gsv && git fetch --depth 1 origin d523079fc05d9a8028d6085bffe4a2757c32abb6
+          git checkout d523079fc05d9a8028d6085bffe4a2757c32abb6
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py311-gsv-d523079
+
+      - name: 依存を入れる
+        run: |
+          # ★版はローカルの動作確認済みに固定する。torchaudio を上げると
+          #   torchaudio.load が TorchCodec を要求して落ちる（2026-09-05 実測）
+          pip install -q torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          grep -vE 'onnxruntime-gpu|^torchaudio' gsv/requirements.txt > req.txt
+          pip install -q -r req.txt
+          pip install -q boto3 anthropic pytchat 'numpy==1.26.4' 'transformers==4.50.0' 'soundfile==0.14.0'
+
+      - uses: actions/cache@v4
+        id: models
+        with:
+          path: |
+            gsv/GPT_SoVITS/pretrained_models
+            assets
+          key: r2-models-v1
+
+      - name: R2から資産を取得
+        if: steps.models.outputs.cache-hit != 'true'
+        run: |
+          python infra/r2.py pull runtime/pretrained_models gsv/GPT_SoVITS/pretrained_models
+          python infra/r2.py pull assets assets
+
+      # ★★これを忘れると番組名と名前のアクセントが元に戻る。
+      #   「サイバー演歌モーニング」「らいおんこずえ」の抑揚は
+      #   GPT-SoVITSのユーザー辞書で作っている（2026-09-04 耳判定で確定）。
+      - name: 読み・アクセントの辞書を適用
+        run: python voice/apply_userdict.py
+
+      # ★ニュースの「前に読んだ」台帳。実行のたびにコンテナが消えるので、
+      #   R2に置いて引き継ぐ。無くても番組は動く（同じ話題を読む確率が上がるだけ）ので
+      #   落としても止めない。
+      - name: ニュース台帳を取ってくる
+        continue-on-error: true
+        run: python infra/r2.py pull state state
+
+      # ★★これがパスBの生命線（2026-09-05 実測から）。
+      #   パスBは「曲1が流れている4〜5分の間におたよりを作る」設計だが、
+      #   実測を積むと **LLMの時間を0と仮定しても間に合わない**:
+      #     セットアップ135秒＋モデル読込20秒＋合成130秒＋納品24秒 = 309秒
+      #     締切は 曲1(280秒)＋交通/SA(22秒) = 302秒
+      #   ∴ **セットアップを放送時間の外に追い出すしかない。**
+      #   パスBを放送の数分前に起動し、準備を全部済ませた状態でここで待つ。
+      #   待っている間に曲1が流れ、チャットが集まる。待ち明けは生成だけ＝150秒前後。
+      #   ⚠ 公開リポジトリなら実行時間は無制限なので、待たせるコストはゼロ。
+      # ★★待ち時間はそのままチャット収集に使う。
+      #   ⚠⚠ これを入れるまで **chat_collect.py はActions上で一度も走っていなかった**
+      #     （2026-09-05 発覚）。load_chat が読む chat_live.json を誰も書かないので、
+      #     本番は常に fake_chat.json（試作用の作り物）に倒れていた。
+      #     ＝「自分が聴いてる回で自分のおたよりが読まれる」というパスBの存在理由が
+      #     機能していなかった。**静かに壊れていた**ので、緑のまま気づけなかった。
+      #   ★落ちても番組は止めない。0件なら「おたよりゼロの回」として進む。
+      - name: 放送を待ちながらチャットを集める
+        if: inputs.pass == 'b' && inputs.warm_wait != '0'
+        continue-on-error: true
+        run: |
+          D=out/$(TZ=Asia/Tokyo date +%F)
+          mkdir -p "$D"
+          echo "準備完了。${{ inputs.warm_wait }}秒かけてチャットを集める → $D/chat_live.json"
+          python v2/chat_collect.py --seconds ${{ inputs.warm_wait }} --out "$D/chat_live.json"
+
+      - name: 台本と音声を作る
+        run: |
+          python -m runner.build --pass ${{ inputs.pass }} ${{ inputs.no_audio && '--no-audio' || '' }}
+
+      # ★台帳の書き戻しは納品より先。ここが落ちても納品は済ませたい…わけではなく、
+      #   逆に「読んだのに記録が残らない」と翌朝また同じ話題を読む。だから先に確実に戻す。
+      - name: ニュース台帳を書き戻す
+        if: always()
+        continue-on-error: true
+        run: python infra/r2.py push state state
+
+      - name: R2へ納品
+        run: |
+          python infra/r2.py push out out
+          python infra/r2.py prune out --days 7
+
+      - name: 結果を持ち帰る
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: morning-${{ inputs.pass }}
+          path: out/
+          if-no-files-found: error

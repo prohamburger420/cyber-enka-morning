@@ -1,0 +1,108 @@
+# 環境が組めるかだけを確かめる最小のワークフロー（2026-09-05）
+#
+# ★いきなり本番の全工程を組まない。落ちたときにどこが原因か分からなくなるため。
+#   ここで確かめるのは4点だけ:
+#     1. GPT-SoVITSの依存がubuntu-latestで入るか（pyopenjtalkはソースビルド）
+#     2. R2から資産を取れるか
+#     3. こずえの声で1文合成できるか
+#     4. 出来たものをR2へ戻せるか
+#   これが通れば、あとは台本生成を足すだけになる。
+name: smoke
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: マシンの素性を記録
+        run: |
+          nproc; free -g | head -2
+          grep -m1 'model name' /proc/cpuinfo
+          df -h / | tail -1
+
+      # ★GPT-SoVITSは固定コミットで取る。本家の変更で本番が壊れないように
+      - name: GPT-SoVITS を取得
+        run: |
+          git clone --depth 1 https://github.com/RVC-Boss/GPT-SoVITS.git gsv
+          cd gsv && git fetch --depth 1 origin d523079fc05d9a8028d6085bffe4a2757c32abb6
+          git checkout d523079fc05d9a8028d6085bffe4a2757c32abb6
+          git log -1 --format='%H %s'
+
+      - name: pip キャッシュ
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py311-gsv-d523079
+
+      - name: 依存を入れる
+        run: |
+          S=$(date +%s)
+          # ★バージョンはローカルの動作確認済み環境に固定する。
+          #   torchaudio を最新にすると `torchaudio.load` が TorchCodec を要求して落ちる
+          #   （2026-09-05 実測: ImportError: TorchCodec is required for load_with_torchcodec）。
+          #   「最新で動くはず」ではなく「動いた版で動かす」。
+          pip install -q torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          # ★onnxruntime-gpu は要求ファイルに入っているがCPUランナーでは不要（巨大）。
+          #   grep で外してからインストールする。
+          # ★torchaudio は上で固定済み。要求ファイルの無印指定に上書きされないよう外す
+          grep -vE 'onnxruntime-gpu|^torchaudio' gsv/requirements.txt > req.txt
+          pip install -q -r req.txt
+          pip install -q boto3 'numpy==1.26.4' 'transformers==4.50.0' 'soundfile==0.14.0'
+          python -c "import torch, torchaudio; print('PINNED', torch.__version__, torchaudio.__version__)"
+          echo "DEPS_SEC=$(( $(date +%s) - S ))"
+
+      # ★モデルは1.3GB。毎回落とすと遅いのでキャッシュする（Actionsのキャッシュは10GBまで）
+      - name: モデルのキャッシュ
+        id: models
+        uses: actions/cache@v4
+        with:
+          path: |
+            gsv/GPT_SoVITS/pretrained_models
+            assets
+          key: r2-models-v1
+
+      - name: R2から取得（キャッシュに無ければ）
+        if: steps.models.outputs.cache-hit != 'true'
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          S=$(date +%s)
+          python infra/r2.py pull runtime/pretrained_models gsv/GPT_SoVITS/pretrained_models
+          python infra/r2.py pull assets assets
+          echo "R2_PULL_SEC=$(( $(date +%s) - S ))"
+          du -sh gsv/GPT_SoVITS/pretrained_models assets
+
+      - name: 1文だけ合成する
+        run: |
+          S=$(date +%s)
+          python runner/smoke.py
+          echo "SYNTH_SEC=$(( $(date +%s) - S ))"
+
+      - name: 出来たものをR2へ戻す
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: python infra/r2.py push out out
+
+      - name: 結果を持ち帰る
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-output
+          path: out/
+          # ★warn にしない。何も無いのに緑で終わると「動いた」と誤解する
+          #   （2026-09-05 実際にすり抜けた）
+          if-no-files-found: error
