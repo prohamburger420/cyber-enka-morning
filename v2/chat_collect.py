@@ -37,6 +37,40 @@ from pathlib import Path
 CHANNEL_LIVE_URL = "https://www.youtube.com/@cyberenka/live"
 
 
+def _resolve_by_html(url: str) -> str | None:
+    """★yt-dlpを使わない解決経路（2026-09-06）。
+
+    本番(GitHub Actions)で yt-dlp が YouTube のbot判定に弾かれた:
+      「Sign in to confirm you're not a bot」
+    yt-dlpは動画情報APIまで踏み込むので判定が厳しい。**ページのHTMLを1枚取るだけ**なら
+    通ることが多い（同じ判定を受けるかは環境ごとに実測）。
+    /live ページのHTMLには canonical で動画URLが入っている。isLiveNow も拾えれば見る。
+    """
+    import re
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/128.0 Safari/537.36"),
+            "Accept-Language": "ja,en;q=0.8",
+        })
+        html = urllib.request.urlopen(req, timeout=30).read().decode("utf-8", "replace")
+    except Exception as e:
+        print(f"★HTML経路も失敗: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
+    m = re.search(r'<link rel="canonical" href="https://www\.youtube\.com/watch\?v=([\w-]{11})"', html)
+    if not m:
+        print(f"★HTMLに動画IDが無い（{len(html)}バイト取得。同意画面かも）", file=sys.stderr)
+        return None
+    vid = m.group(1)
+    if '"isLiveNow":true' not in html:
+        print(f"★HTML経路: {vid} は isLiveNow ではない", file=sys.stderr)
+        return None
+    print(f"HTML経路で解決: {vid}", file=sys.stderr)
+    return vid
+
+
 def resolve_live_video_id(url: str = CHANNEL_LIVE_URL) -> str | None:
     """チャンネルの「いま配信中」の動画IDを引く。
 
@@ -58,15 +92,16 @@ def resolve_live_video_id(url: str = CHANNEL_LIVE_URL) -> str | None:
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=120)
     except FileNotFoundError:
-        print("★yt-dlp が入っていない（配信の有無は判定できていない）", file=sys.stderr)
-        return None
+        print("★yt-dlp が入っていない → HTML経路を試す", file=sys.stderr)
+        return _resolve_by_html(url)
     except Exception as e:
-        print(f"★yt-dlp の実行に失敗: {type(e).__name__}: {e}", file=sys.stderr)
-        return None
+        print(f"★yt-dlp の実行に失敗: {type(e).__name__}: {e} → HTML経路を試す", file=sys.stderr)
+        return _resolve_by_html(url)
     if r.returncode != 0:
+        # ★本番(Actions)はここに来る: YouTubeのbot判定「Sign in to confirm you're not a bot」
         print(f"★yt-dlp が終了コード{r.returncode}: "
-              f"{(r.stderr or '').strip()[:300]}", file=sys.stderr)
-        return None
+              f"{(r.stderr or '').strip()[:300]} → HTML経路を試す", file=sys.stderr)
+        return _resolve_by_html(url)
     try:
         line = (r.stdout or "").strip().splitlines()[0]
         vid, is_live = line.split("|")
