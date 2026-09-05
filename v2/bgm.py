@@ -13,6 +13,27 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 
+
+def find(name: str) -> Path:
+    """BGM素材の実体を探す。
+
+    ★★2026-09-05 発覚: **本番の音声にBGMが付いていなかった。**
+      BGMを敷くのは `make_through.py` だけで、それは通し(TOOSHI)を作るための
+      ローカル専用スクリプト。**本番ワークフローは一度も呼んでいない**
+      （morning.yml にも runner/build.py にも `make_through` が無い）。
+      ＝ nordwが耳で決めた「OPは5秒後から」「イントロ明け-2dB」「ニュース専用BGM」は
+        **全部ローカルの通しにしか効いていなかった**。R2に納品されていたのは裸の声。
+      ⚠ REF_BY_CORNER（ニュースのテンション）と**まったく同じ形の事故**。
+        「ローカルで直した」と「本番で直った」は別。★毎回この2つを分けて確認する。
+
+    素材はキャラ資産なので**公開リポジトリに置けない**。R2の `assets/bgm/` から配る。
+    ローカル(kozue-asa直下)にも同じものがあるので、両方を見る。
+    """
+    for p in (BASE / "assets" / "bgm" / name, BASE / name):
+        if p.exists():
+            return p
+    raise FileNotFoundError(f"BGMが無い: {name}（assets/bgm/ と {BASE} を探した）")
+
 # セグメント名 → BGMファイル
 BGM_MAP = {
     "talk1":   "op2(5秒くらいから話始めるイメージ、そのままフリートークにも）.mp3",
@@ -107,9 +128,7 @@ def mix(voice: Path, seg_name: str, dst: Path,
     if seg_name not in BGM_MAP:
         print(f"  ⚠ BGM未登録のコーナー: {seg_name} → BGM無しで通す", file=__import__("sys").stderr)
         return 0.0
-    bgm = BASE / BGM_MAP[seg_name]
-    if not bgm.exists():
-        raise FileNotFoundError(f"BGMが無い: {bgm}")
+    bgm = find(BGM_MAP[seg_name])
 
     lead = LEAD_IN.get(seg_name, DEFAULT_LEAD_IN)
     tail = TAIL_BY_SEG.get(seg_name, TAIL)
@@ -174,6 +193,8 @@ if __name__ == "__main__":
     import sys
     sys.stdout.reconfigure(encoding="utf-8")
     for name, f in BGM_MAP.items():
-        p = BASE / f
-        print(f"{'OK ' if p.exists() else 'NG '} {name:9s} {f[:40]}"
-              + (f"  {duration(p):.0f}s" if p.exists() else ""))
+        try:
+            p = find(f)
+        except FileNotFoundError:
+            print(f"NG  {name:9s} {f[:40]}"); continue
+        print(f"OK  {name:9s} {f[:40]}  {duration(p):.0f}s  ({p.parent})")

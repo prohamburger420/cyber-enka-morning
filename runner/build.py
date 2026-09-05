@@ -31,6 +31,8 @@ sys.path.insert(0, str(ROOT / "data"))
 
 import generate_kozue_asa as v1          # noqa: E402  天気・交通・SA・台本の分解を再利用
 import generate_v2 as v2                 # noqa: E402  構成・選曲・チャット選別
+import bgm                               # noqa: E402  コーナー別BGM（★本番でも敷く）
+import playlist                          # noqa: E402  放送用M3U（RadioDJが読む）
 from runner import script_api, tts       # noqa: E402
 
 ASSETS = ROOT / "assets"
@@ -86,13 +88,36 @@ def synth_segments(segs, outdir: Path, log) -> tuple[list[Path], list[str]]:
         log.info("%s %.1f秒 %.1f字/秒", name, d, cps)
         # ★字/秒の番人。8を超えたら台本の一部が音から落ちている疑い
         #   （2026-09-04 実測: 参照音声の書き起こし不足で塊の頭が消え7.9字/秒になった）
+        # ⚠ 必ず**BGMを敷く前**に測る。BGMは前後に無音(lead/tail)を足すので、
+        #   混ぜたあとの長さで割ると字/秒が薄まって番人が効かなくなる。
         if cps > 8.0:
             log.warning("★%s は速すぎる（%.1f字/秒）。台本の脱落を疑う", name, cps)
+
+        # ★★BGMを敷く（2026-09-05 修正）。
+        #   これが**本番に無かった**。BGMを敷くのは make_through.py だけで、
+        #   それはローカル専用（通しmp3を作るためのもの）。本番ワークフローは
+        #   一度も呼んでいなかった＝**納品されていたのは裸の声**。
+        #   nordwが耳で決めた OP5秒待ち・イントロ明け-2dB・ニュース専用BGM は
+        #   全部ローカルにしか効いていなかった。
+        #   ⚠ 失敗したらブロックを欠けたものとして扱う（＝この回は配らない）。
+        #     BGM無しの回を黙って配ると、**放送に乗るまで誰も気づけない**。
+        try:
+            mixed = bgm.mix(wav, name, outdir / f"seg_{idx:02d}_{name}_bgm.wav")
+            wav.unlink(missing_ok=True)
+            (outdir / f"seg_{idx:02d}_{name}_bgm.wav").rename(wav)
+            log.info("  BGM %s → %.1f秒", bgm.BGM_MAP.get(name, "（無し）"), mixed)
+        except Exception as e:
+            import traceback
+            log.error("BGMに失敗 %s %s: %s\n%s", name, type(e).__name__, e,
+                      traceback.format_exc())
+            failed.append(name)
+            continue
         made.append(wav)
     return made, failed
 
 
-def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool) -> int:
+def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool,
+        hour: int = 6) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     log = logging.getLogger("build")
     t0 = time.time()
@@ -158,6 +183,21 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool) 
             log.error("  → 番組は流れず、通常の曲が流れ続ける（意図した挙動）")
             return 1
 
+        # ★★放送用のM3Uを書く（2026-09-05）。RadioDJの
+        #   「Load M3U Playlist by Date Mask」がこれを読む。
+        #   曲もブロックも**並び順ごとこちらが決める**ので、こずえが読み上げた曲と
+        #   流れる曲が必ず一致する（`infra/RADIODJ_SIYOU.md` に調査の全文）。
+        #   ⚠ M3Uが無ければRadioDJは何も差し込まず、Auto DJの曲が流れ続ける
+        #     ＝事故の時に無音にならない（イベントの Open Positions を `Top` にすること）。
+        jin = ASSETS / "bgm" / "jingle1.wav"
+        if jin.exists():
+            import shutil
+            shutil.copy2(jin, outdir / "jingle1.wav")
+        else:
+            log.error("★ジングルが無い: %s（M3Uに書いても再生できない）", jin)
+        playlist.build(day, outdir, pack, log,
+                       hours=playlist.BROADCAST_HOURS if pass_name == "a" else [hour])
+
     log.info("=== パス%s 完了 %.1f秒 ===", pass_name.upper(), time.time() - t0)
     return 0
 
@@ -168,10 +208,13 @@ def main() -> int:
     ap.add_argument("--date", default=None, help="YYYY-MM-DD（既定は今日）")
     ap.add_argument("--no-audio", action="store_true")
     ap.add_argument("--traffic-live", action="store_true")
+    # ★パスBは「何時の回か」を知る必要がある。おたよりは回ごとに作り直すので、
+    #   その回のM3Uだけを書き直す。パスAは6/7/8の3本まとめて書くので使わない。
+    ap.add_argument("--hour", type=int, default=6, help="パスB専用。何時の回か（6/7/8）")
     a = ap.parse_args()
     day = (datetime.date.fromisoformat(a.date) if a.date
            else datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date())
-    return run(a.pass_name, day, a.no_audio, a.traffic_live)
+    return run(a.pass_name, day, a.no_audio, a.traffic_live, a.hour)
 
 
 if __name__ == "__main__":

@@ -36,6 +36,10 @@ on:
         description: "パスB専用。準備を終えたあと、ここで指定した秒数だけ待ってから生成する"
         required: false
         default: "0"
+      hour:
+        description: "パスB専用。何時の回か（6/7/8）。その回のM3Uだけ書き直す"
+        required: false
+        default: "6"
 
 jobs:
   build:
@@ -48,6 +52,7 @@ jobs:
       #   → 空なら既定値に倒す形に統一する。**自動起動は必ずパスA。**
       PASS: ${{ inputs.pass || 'a' }}
       WARM_WAIT: ${{ inputs.warm_wait || '0' }}
+      HOUR: ${{ inputs.hour || '6' }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -86,7 +91,10 @@ jobs:
           path: |
             gsv/GPT_SoVITS/pretrained_models
             assets
-          key: r2-models-v1
+          # ★★キーを上げないと assets が再取得されない（2026-09-05）。
+          #   BGM素材を assets/bgm/ に足したが、キャッシュが当たると pull が
+          #   丸ごと飛ばされるので**古い assets のまま走る**。素材を足したら必ず上げる。
+          key: r2-models-v2-bgm
 
       - name: R2から資産を取得
         if: steps.models.outputs.cache-hit != 'true'
@@ -132,9 +140,14 @@ jobs:
           echo "準備完了。${WARM_WAIT}秒かけてチャットを集める → $D/chat_live.json"
           python v2/chat_collect.py --seconds "$WARM_WAIT" --out "$D/chat_live.json"
 
+      # ★BGMのミックスに ffmpeg/ffprobe が要る。ubuntu-latest には入っているが、
+      #   入っていない時に**BGMの失敗として出る**と原因が分かりにくいので先に確かめる。
+      - name: ffmpeg があることを確かめる
+        run: ffmpeg -version | head -1 && ffprobe -version | head -1
+
       - name: 台本と音声を作る
         run: |
-          python -m runner.build --pass "$PASS" ${{ inputs.no_audio && '--no-audio' || '' }}
+          python -m runner.build --pass "$PASS" --hour "$HOUR" ${{ inputs.no_audio && '--no-audio' || '' }}
 
       # ★台帳の書き戻しは納品より先。ここが落ちても納品は済ませたい…わけではなく、
       #   逆に「読んだのに記録が残らない」と翌朝また同じ話題を読む。だから先に確実に戻す。
