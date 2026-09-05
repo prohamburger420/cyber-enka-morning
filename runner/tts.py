@@ -82,6 +82,14 @@ def synth(text: str, out_path: str, corner: str | None = None,
     out_path = str(Path(out_path).resolve())
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     ref_wav, ref_text = REF_BY_CORNER.get(corner or "", REF_DEFAULT)
+    # ★★どの参照音声を使ったかを必ず残す（2026-09-05 追加）。
+    #   これが無かったせいで「本番だけニュースのテンションが上がっていない」に
+    #   気づけなかった。ローカルには同じログがあり、本番だけ無音だった。
+    #   ⚠ 設定は**使われたことをログに出して初めて確認できる**。
+    #     定義しただけでは、届いているかどうか分からない。
+    print(f"  [{corner or '既定'}] 参照音声={Path(ref_wav).name} "
+          f"speed={speed} split={SPLIT_METHOD} seed={SEED} parallel={PARALLEL_INFER}",
+          flush=True)
     tts = get_tts()
     sr, audio = next(tts.run({
         "text": _fix_yomi(text), "text_lang": "ja",
