@@ -58,6 +58,10 @@ jobs:
       R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      # ★チャット取得は公式YouTube Data API（2026-09-06）。非公式経路は
+      #   ActionsのIPが弾かれて全滅した（yt-dlp/HTML/RSS/pytchat、全て実測）。
+      #   キーが未設定の間は非公式経路に落ちる＝本番ではフォールバック版おたよりになる。
+      YT_API_KEY: ${{ secrets.YT_API_KEY }}
       GSV_DIR: ${{ github.workspace }}/gsv
     steps:
       - uses: actions/checkout@v4

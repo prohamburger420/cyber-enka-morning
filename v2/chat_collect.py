@@ -28,6 +28,7 @@
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -151,6 +152,101 @@ def collect(video_id: str, seconds: int, limit: int = 40,
     return got
 
 
+# ============================================================
+# ★★公式 YouTube Data API 経路（2026-09-06 これが本番の本線）
+#   実測の結果、非公式経路は本番(GitHub Actions)から**全滅**:
+#     yt-dlp   … 「Sign in to confirm you're not a bot」（IPで弾く）
+#     HTML     … 1.18MB返るが動画IDが入っていない（データセンターIPには渡さない）
+#     RSS      … 配信中のライブが載らない
+#     pytchat  … watchページが取れず InvalidVideoIdException
+#   公式APIはキー認証なのでIPで弾かれない。無料枠1日10,000ユニットに対し、
+#   この番組の消費は 1日≒320（search 100×3回 + videos 1×3 + chat poll ≒5）。
+#   ⚠ キーは環境変数 YT_API_KEY。無ければ従来経路（ローカル用）に落ちる。
+# ============================================================
+CHANNEL_ID = "UCk0HbpDai30CJt-KJxxSAYQ"     # @cyberenka（2026-09-06 HTMLから実測）
+
+
+def _api(path: str, **params) -> dict:
+    import urllib.parse
+    import urllib.request
+    params["key"] = os.environ["YT_API_KEY"]
+    url = f"https://www.googleapis.com/youtube/v3/{path}?" + urllib.parse.urlencode(params)
+    with urllib.request.urlopen(url, timeout=30) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def resolve_live_api(channel_id: str = CHANNEL_ID) -> str | None:
+    """公式APIで「いま配信中」の動画IDを引く（search.list=100ユニット）。"""
+    try:
+        r = _api("search", part="id", channelId=channel_id,
+                 eventType="live", type="video", maxResults=1)
+        items = r.get("items", [])
+        if not items:
+            print("★API: このチャンネルに配信中のライブが無い", file=sys.stderr)
+            return None
+        return items[0]["id"]["videoId"]
+    except Exception as e:
+        print(f"★APIでの解決に失敗: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
+
+
+def collect_api(video_id: str, seconds: int, limit: int = 40,
+                log_path: Path | None = None) -> list[dict]:
+    """公式APIでチャットを集める。集め始めより後の発言だけ。
+
+    ⚠ liveChatMessages.list は初回に**過去ぶんの履歴も返す**。
+      募集アナウンスより前の発言を読むと嘘になるので、publishedAt で必ず切る。
+    """
+    started_utc = datetime.now(timezone.utc)
+    t0 = time.time()
+    got: list[dict] = []
+    try:
+        v = _api("videos", part="liveStreamingDetails", id=video_id)
+        chat_id = (v["items"][0].get("liveStreamingDetails", {})
+                   .get("activeLiveChatId"))
+        if not chat_id:
+            print(f"★API: {video_id} にアクティブなチャットが無い", file=sys.stderr)
+            raise SystemExit  # → finally でログだけ書いて空を返す
+        token = None
+        while time.time() - t0 < seconds and len(got) < limit:
+            kw = {"part": "snippet,authorDetails", "liveChatId": chat_id,
+                  "maxResults": 200}
+            if token:
+                kw["pageToken"] = token
+            r = _api("liveChatMessages", **kw)
+            token = r.get("nextPageToken")
+            for it in r.get("items", []):
+                sn = it["snippet"]
+                ts = sn.get("publishedAt", "")
+                # ★集め始めより前の発言は捨てる（初回レスポンスに履歴が混ざる）
+                if ts and ts < started_utc.isoformat().replace("+00:00", "Z"):
+                    continue
+                txt = (sn.get("textMessageDetails") or {}).get("messageText", "")
+                if not txt:
+                    continue
+                got.append({"author": it["authorDetails"]["displayName"],
+                            "text": txt, "ts": ts})
+                if len(got) >= limit:
+                    break
+            # APIが指定する間隔を尊重する（既定は数千ms）
+            wait = int(r.get("pollingIntervalMillis", 5000)) / 1000
+            if time.time() - t0 + wait < seconds:
+                time.sleep(wait)
+            else:
+                break
+    except SystemExit:
+        pass
+    except Exception as e:
+        print(f"★APIでのチャット取得に失敗: {type(e).__name__}: {e}", file=sys.stderr)
+    if log_path:      # ★採否に関わらず生ログを残す（collect() と同じ）
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(json.dumps(
+            {"video_id": video_id, "collected_at": started_utc.isoformat(),
+             "window_sec": seconds, "via": "api", "messages": got},
+            ensure_ascii=False, indent=1), encoding="utf-8")
+    return got
+
+
 JST = timezone(timedelta(hours=9))
 
 
@@ -197,14 +293,17 @@ def main() -> int:
         if a.seconds < 20:
             print(f"★集める時間が {a.seconds}秒しかない。起動が遅すぎる", file=sys.stderr)
 
-    vid = a.video or resolve_live_video_id()
+    # ★キーがあれば公式API（本番はこちら）。無ければ非公式経路（ローカル用）
+    use_api = bool(os.environ.get("YT_API_KEY"))
+    print(f"経路: {'公式API' if use_api else '非公式(yt-dlp/pytchat)'}", flush=True)
+    vid = a.video or (resolve_live_api() if use_api else resolve_live_video_id())
     if not vid:
         print("配信中の動画が見つからない → フォールバックへ", file=sys.stderr)
         a.out.write_text(json.dumps({"messages": []}, ensure_ascii=False), encoding="utf-8")
         return 1
 
     print(f"配信 {vid} から {a.seconds}秒ぶん集めます", flush=True)
-    got = collect(vid, a.seconds, a.limit, log_path=a.out)
+    got = (collect_api if use_api else collect)(vid, a.seconds, a.limit, log_path=a.out)
     print(f"{len(got)}件 取得 -> {a.out}")
     for m in got[:5]:
         print(f"  {m['author']}: {m['text'][:40]}")
