@@ -236,8 +236,16 @@ def build(day: datetime.date, log, n: int = 2) -> dict | None:
             continue                               # この1本は諦める（他の本は出す）
         used.update(cast)
         recent_kata.add(kata)              # 同じ日に同じ型を2本出さない
+        # ★その人が過去に何回出たかを数える（2026-09-05）。
+        #   年代記には「誰が何の型で出たか」しか無く、**何を喋ったかは残っていない**。
+        #   だが「何回目か」は数えられる。それで
+        #   「名前の由来・異名・経歴」のような**一度きりのネタ**の繰り返しを防げる。
+        #   実際に出た問題: 西馬拳二郎の「さいばけんじろう＝サイバーが隠れてる」を
+        #   毎回言うと飽きる（2026-09-05 の台本で発生）。
+        appear = {c: sum(1 for r in past if c in r.get("cast", [])) + 1 for c in cast}
         items.append({
             "kata": kata, "hint": hint, "cast": cast,
+            "登場回数": appear,
             # ★曲は必ず実在のものを渡す。無い人は None（曲の話をさせない）
             "songs": {c: (rnd.choice(by[c]) if by.get(c) else None) for c in cast},
             "所属": {c: cards[c].get("所属", "未確認") for c in cast},
