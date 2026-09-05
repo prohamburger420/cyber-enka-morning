@@ -33,7 +33,7 @@ on:
         type: boolean
         default: false
       warm_wait:
-        description: "パスB専用。準備を終えたあと、ここで指定した秒数だけ待ってから生成する"
+        description: "パスB専用。0=チャットを集めない / 1=集める（窓は放送時刻からHH:01〜HH:04で自動）"
         required: false
         default: "0"
       hour:
@@ -197,12 +197,20 @@ jobs:
         run: |
           D=out/$(TZ=Asia/Tokyo date +%F)
           mkdir -p "$D"
-          echo "準備完了。${WARM_WAIT}秒かけてチャットを集める → $D/chat_live.json"
+          # ★★収集の窓は**壁時計で決める**（2026-09-06）。放送のHH時に対して
+          #   HH:01:00 〜 HH:04:00。準備にかかった時間から逆算しない。
+          #   ⚠ 逆算だと準備が速い日に**募集アナウンス(HH:00:50頃)より前**から集めてしまい、
+          #     テーマと無関係な発言を「おたより」として読む事故になる。
+          #   ★準備が遅れた日は収集時間が短くなるだけで、**間違った時間帯は集めない**。
+          FROM=$(printf "%02d:01:00" "$HOUR")
+          UNTIL=$(printf "%02d:04:00" "$HOUR")
+          echo "準備完了。$FROM 〜 $UNTIL（日本時間）のチャットを集める → $D/chat_live.json"
           # ★★失敗を**実行サマリの先頭に出す**（2026-09-06）。
           #   continue-on-error は「番組を止めない」ために要る。だが緑のまま
           #   埋もれると、**おたよりが一度も取れていないことに気づけない**（実際に起きた）。
           #   ::warning:: はGitHubのUIで run のページ最上部に出る。
-          python v2/chat_collect.py --seconds "$WARM_WAIT" --out "$D/chat_live.json" \
+          python v2/chat_collect.py --from-jst "$FROM" --until-jst "$UNTIL" \
+              --out "$D/chat_live.json" \
             || { echo "::warning title=チャット取得に失敗::おたよりはフォールバック版になります"; exit 1; }
 
       - name: 台本と音声を作る

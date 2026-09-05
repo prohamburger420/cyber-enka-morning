@@ -31,7 +31,7 @@ import json
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 CHANNEL_LIVE_URL = "https://www.youtube.com/@cyberenka/live"
@@ -116,13 +116,51 @@ def collect(video_id: str, seconds: int, limit: int = 40,
     return got
 
 
+JST = timezone(timedelta(hours=9))
+
+
+def _wait_until(hhmmss: str) -> None:
+    """日本時間の HH:MM:SS まで待つ。過ぎていれば待たない。
+
+    ★★時計に合わせる（2026-09-06）。「準備に何秒かかるか」から逆算していたが、
+      準備が速いと**募集アナウンスより前から集めてしまう**。
+      talk1 の募集は 6:00:50 頃。それより前のチャットを「おたより」として読むと嘘になる
+      （v1 のSA捏造と同じ型）。⚠ 準備時間は日によってぶれるので、**逆算は当てにならない**。
+      壁時計に合わせれば、準備が遅れて収集時間が短くなることはあっても、
+      **間違った時間帯を集めることはない**。
+    """
+    now = datetime.now(JST)
+    h, m, s = (int(x) for x in hhmmss.split(":"))
+    target = now.replace(hour=h, minute=m, second=s, microsecond=0)
+    d = (target - now).total_seconds()
+    if d <= 0:
+        print(f"★{hhmmss} は既に過ぎている（{d:.0f}秒）。すぐ集め始める", flush=True)
+        return
+    print(f"{hhmmss} まで {d:.0f}秒待つ", flush=True)
+    time.sleep(d)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="YouTubeライブのチャットを集める")
     ap.add_argument("--video", help="動画ID。省略時はチャンネルの現行ライブを自動で引く")
     ap.add_argument("--seconds", type=int, default=180, help="集める秒数")
     ap.add_argument("--limit", type=int, default=40, help="最大件数")
     ap.add_argument("--out", type=Path, default=Path(__file__).parent / "chat_live.json")
+    # ★放送に合わせる用。日本時間の HH:MM:SS で「いつからいつまで」を指定する
+    ap.add_argument("--from-jst", help="この時刻まで待ってから集め始める（例 06:01:00）")
+    ap.add_argument("--until-jst", help="この時刻まで集める（例 06:04:00）")
     a = ap.parse_args()
+
+    if a.until_jst:
+        if a.from_jst:
+            _wait_until(a.from_jst)
+        now = datetime.now(JST)
+        h, m, s = (int(x) for x in a.until_jst.split(":"))
+        end = now.replace(hour=h, minute=m, second=s, microsecond=0)
+        a.seconds = max(0, int((end - now).total_seconds()))
+        print(f"{a.until_jst} まで＝{a.seconds}秒ぶん集めます", flush=True)
+        if a.seconds < 20:
+            print(f"★集める時間が {a.seconds}秒しかない。起動が遅すぎる", file=sys.stderr)
 
     vid = a.video or resolve_live_video_id()
     if not vid:
