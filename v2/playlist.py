@@ -132,10 +132,52 @@ def build(day: datetime.date, outdir: Path, pack: dict, log,
     return made
 
 
+def _test(log) -> None:
+    """壊れたら落ちる最小のチェック。`python v2/playlist.py --test`
+
+    ★ここが静かに間違うと**放送の並び順が壊れる**が、聴くまで気づけない。
+      本番を15分回す前に、ここで潰せるものは潰す。
+    """
+    import shutil, tempfile
+    day = datetime.date(2026, 9, 5)
+    pack = {"song1": {"file": "A.mp3"}, "song2": {"file": "B.mp3"}}
+    tmp = Path(tempfile.mkdtemp()) / day.isoformat()
+    tmp.mkdir(parents=True)
+    try:
+        # 本番と同じ 7ブロック・.wav（★ローカルは.mp3。両方拾えないと片方で全滅する）
+        for i, n in enumerate(
+                ["talk1", "traffic", "sa", "news", "mail_fb", "uranai", "ending"], 1):
+            (tmp / f"seg_{i:02d}_{n}.wav").write_bytes(b"x")
+
+        made = build(day, tmp, pack, log)
+        assert len(made) == 3, f"パスAは6/7/8の3本書くはず: {made}"
+        t = made[0].read_text(encoding="utf-8")
+        assert "seg_05_mail_fb.wav" in t, "パスAはフォールバック版おたよりを指すはず"
+        assert t.count("jingle1.wav") == 2, "ジングルは曲明けの2回"
+        assert t.index("A.mp3") < t.index("B.mp3"), "曲の順番が入れ替わっている"
+
+        # パスB: 本番版おたよりが来たら差し替わり、その回だけ書き直す
+        (tmp / "seg_01_mail.wav").write_bytes(b"x")
+        b = build(day, tmp, pack, log, hours=[7])
+        assert len(b) == 1 and b[0].name.endswith(".07.m3u"), b
+        tb = b[0].read_text(encoding="utf-8")
+        assert "seg_01_mail.wav" in tb and "mail_fb" not in tb, "おたよりが差し替わっていない"
+
+        # 欠けたら書かない（＝配らない＝曲が流れ続ける）
+        (tmp / "seg_04_news.wav").unlink()
+        assert build(day, tmp, pack, log, hours=[6]) == [], "欠けているのに書いてしまった"
+    finally:
+        shutil.rmtree(tmp.parent, ignore_errors=True)
+    print("★playlist: 全部通った")
+
+
 if __name__ == "__main__":
     import json, logging, sys
     sys.stdout.reconfigure(encoding="utf-8")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if "--test" in sys.argv:
+        _test(logging.getLogger("m3u"))
+        raise SystemExit(0)
     base = Path(__file__).resolve().parent.parent
     d = datetime.date.fromisoformat(sys.argv[1] if len(sys.argv) > 1 else "2026-09-05")
     outdir = base / "episodes_v2" / d.isoformat()

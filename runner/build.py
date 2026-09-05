@@ -190,13 +190,19 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool,
         #   ⚠ M3Uが無ければRadioDJは何も差し込まず、Auto DJの曲が流れ続ける
         #     ＝事故の時に無音にならない（イベントの Open Positions を `Top` にすること）。
         jin = ASSETS / "bgm" / "jingle1.wav"
-        if jin.exists():
-            import shutil
-            shutil.copy2(jin, outdir / "jingle1.wav")
-        else:
-            log.error("★ジングルが無い: %s（M3Uに書いても再生できない）", jin)
-        playlist.build(day, outdir, pack, log,
-                       hours=playlist.BROADCAST_HOURS if pass_name == "a" else [hour])
+        if not jin.exists():
+            # ★ここは警告で済ませない。M3Uに書いた行のファイルが無い状態を作ると、
+            #   放送中にRadioDJがそこで詰まる。**欠けた番組は配らない**の方針どおり止める。
+            log.error("★ジングルが無い: %s → この回は納品しない", jin)
+            return 1
+        import shutil
+        shutil.copy2(jin, outdir / "jingle1.wav")
+        made_m3u = playlist.build(
+            day, outdir, pack, log,
+            hours=playlist.BROADCAST_HOURS if pass_name == "a" else [hour])
+        if not made_m3u:
+            log.error("★M3Uが1本も書けなかった → この回は納品しない")
+            return 1
 
     log.info("=== パス%s 完了 %.1f秒 ===", pass_name.upper(), time.time() - t0)
     return 0

@@ -99,6 +99,23 @@ jobs:
           sudo apt-get install -y -qq ffmpeg
           command -v ffmpeg && command -v ffprobe
 
+      # ★★英語g2pが使うNLTKの辞書を先に落とす（2026-09-05 実測で news が2回落ちた）。
+      #   台本に**英字が混じると英語のg2p(g2p_en)が走り**、NLTKの品詞タガーを要求する。
+      #   今日は電脳芸能ニュースに「HOT LIMIT」「T.M.Revolution」が入って踏んだ。
+      #   ⚠ GPT-SoVITSが自動で落とすのは**旧名の `averaged_perceptron_tagger`** だが、
+      #     新しいNLTKは **`averaged_perceptron_tagger_eng`** を探すので見つからない。
+      #   ★これは「その日の台本に英字が入ったときだけ落ちる」＝**日によって出たり出なかったり**する。
+      #     以前 news だけが落ちて 6/7ブロックが納品された件も、ほぼ同じ原因のはず。
+      - name: 英語g2pの辞書を落とす
+        run: |
+          python - <<'EOF'
+          import nltk
+          for r in ("averaged_perceptron_tagger_eng", "averaged_perceptron_tagger",
+                    "cmudict", "punkt_tab"):
+              ok = nltk.download(r, quiet=True)
+              print(("OK  " if ok else "NG  ") + r)
+          EOF
+
       - uses: actions/cache@v4
         id: models
         with:
