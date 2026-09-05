@@ -85,6 +85,20 @@ jobs:
           pip install -q -r req.txt
           pip install -q boto3 anthropic pytchat 'numpy==1.26.4' 'transformers==4.50.0' 'soundfile==0.14.0'
 
+      # ★★BGMのミックスに ffmpeg/ffprobe が要る（2026-09-05 実測）。
+      #   ⚠ **ubuntu-latest には入っていない。** 「入っているはず」で書いて落ちた。
+      #   ⚠★ しかも最初に置いたガードが `ffmpeg -version | head -1` だったため、
+      #     **パイプの終了コードは head のもの＝ffmpegが無くても成功**していた。
+      #     ＝「測定系が生きているか」を確かめずに測っていた。ガードは
+      #     **無い時に本当に落ちること**を確かめてから置く。
+      #   ★ここに置くのは、パスBの待機(WARM_WAIT)より**手前**にするため。
+      #     後ろに置くと、放送が始まってからaptを叩くことになる。
+      - name: ffmpeg を入れる
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          command -v ffmpeg && command -v ffprobe
+
       - uses: actions/cache@v4
         id: models
         with:
@@ -139,11 +153,6 @@ jobs:
           mkdir -p "$D"
           echo "準備完了。${WARM_WAIT}秒かけてチャットを集める → $D/chat_live.json"
           python v2/chat_collect.py --seconds "$WARM_WAIT" --out "$D/chat_live.json"
-
-      # ★BGMのミックスに ffmpeg/ffprobe が要る。ubuntu-latest には入っているが、
-      #   入っていない時に**BGMの失敗として出る**と原因が分かりにくいので先に確かめる。
-      - name: ffmpeg があることを確かめる
-        run: ffmpeg -version | head -1 && ffprobe -version | head -1
 
       - name: 台本と音声を作る
         run: |
