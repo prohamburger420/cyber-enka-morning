@@ -167,6 +167,16 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool,
     segs = v1.parse_segments(script)
     log.info("台本OK: %s", [s[0] for s in segs])
 
+    # ★★読み検査（英字の検出＋カタカナの書き出し）。**本番でも必ず通す**。
+    #   ⚠ これを入れるまで **ローカル(generate_v2.py)からしか呼ばれていなかった**
+    #     ＝英字の検出も、毎朝の読みの記録も、本番では走っていなかった。
+    #   ★2026-09-05 だけで同じ形の事故が3回:
+    #     参照音声(ニュースのテンション) / BGM / この読み検査。
+    #     **「ローカルで直した」と「本番で直った」は別。**
+    #   ★落ちても番組は止めない（気づくための仕組みであって、直す仕組みではない）。
+    from v2 import yomi_check
+    yomi_check.write(segs, outdir.resolve(), log)
+
     if not no_audio:
         made, failed = synth_segments(segs, outdir, log)
         log.info("音声 %d本", len(made))
