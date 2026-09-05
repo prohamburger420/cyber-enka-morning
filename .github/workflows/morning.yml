@@ -122,16 +122,24 @@ jobs:
           path: |
             gsv/GPT_SoVITS/pretrained_models
             assets
-          # ★★キーを上げないと assets が再取得されない（2026-09-05）。
-          #   BGM素材を assets/bgm/ に足したが、キャッシュが当たると pull が
-          #   丸ごと飛ばされるので**古い assets のまま走る**。素材を足したら必ず上げる。
-          key: r2-models-v2-bgm
+          # ★assets は毎回引くので、ここを手で上げる必要はもう無い。
+          #   （以前は上げ忘れると古い辞書・古いBGMのまま走った）
+          key: r2-models-v3
 
-      - name: R2から資産を取得
+      # 共通モデル(1.3GB)はキャッシュが当たれば引かない
+      - name: 共通モデルを取ってくる
         if: steps.models.outputs.cache-hit != 'true'
-        run: |
-          python infra/r2.py pull runtime/pretrained_models gsv/GPT_SoVITS/pretrained_models
-          python infra/r2.py pull assets assets
+        run: python infra/r2.py pull runtime/pretrained_models gsv/GPT_SoVITS/pretrained_models
+
+      # ★★番組の資産は**毎回引く**（2026-09-05）。
+      #   ⚠ 以前はキャッシュが当たると丸ごと飛ばしていたので、
+      #     **読みの辞書やBGMを差し替えても本番には届かなかった**。
+      #     キーを手で上げる運用は必ず忘れる（実際に忘れかけた）。
+      #   ★r2.py pull は**中身が同じものは落とさない**（ETag照合）ので、
+      #     毎回引いても実際に流れるのは変わったファイルだけ。
+      #     キャッシュはダウンロード量の削減として効いたまま。
+      - name: 番組の資産を取ってくる（差分だけ流れる）
+        run: python infra/r2.py pull assets assets
 
       # ★★これを忘れると番組名と名前のアクセントが元に戻る。
       #   「サイバー演歌モーニング」「らいおんこずえ」の抑揚は
