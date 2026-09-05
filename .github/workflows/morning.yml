@@ -121,6 +121,16 @@ jobs:
         continue-on-error: true
         run: python infra/r2.py push state state
 
+      # ★★パスAは「その日の始まり」なので、納品前にその日のフォルダを空にする。
+      #   （2026-09-05 実際に起きた）構成の違う古い回のブロックが同じ日付フォルダに
+      #   残り、今日の回と混ざった。VPSは out/ を丸ごとコピーするので、
+      #   **RadioDJに別の回のブロックが流れる**。しかも「エンディングだけ古いものが残る」
+      #   ので一見そろって見える。prune は7日より古いものしか消さないので拾えない。
+      #   ⚠ パスBでは絶対に呼ばない（パスAが作ったものを消してしまう）。
+      - name: この日のフォルダを空にする（パスAのみ）
+        if: inputs.pass == 'a'
+        run: python infra/r2.py clear "out/$(TZ=Asia/Tokyo date +%F)"
+
       - name: R2へ納品
         run: |
           python infra/r2.py push out out

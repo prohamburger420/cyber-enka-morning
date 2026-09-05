@@ -112,17 +112,51 @@ def prune(prefix: str, days: int) -> int:
     return 0
 
 
+def clear(prefix: str) -> int:
+    """その接頭辞の下を全部消す。★パスAが「その日の始まり」に使う。
+
+    ★なぜ要るか（2026-09-05 実際に起きた）
+      out/<日付>/ に**構成の違う古い回のブロックが残り、今日の回と混ざった**。
+      検証用リポジトリが6ブロック構成で走った日と、本番が7ブロック構成で走った日が
+      同じ日付だったため、seg_04 が2種類・seg_06 が2種類ある状態になった。
+      VPSは out/ を丸ごとコピーするので、**RadioDJに別の回のブロックが混ざる**。
+      しかも「エンディングだけ古い回のものが残る」ので、**一見そろって見えてしまう**。
+      prune は7日より古いものしか消さないので、同じ日の残骸は拾えない。
+
+    ⚠ パスBでは絶対に呼ばない（パスAが作ったものを消してしまう）。
+    """
+    s3, bucket = client()
+    n = 0
+    tok = None
+    while True:
+        kw = {"Bucket": bucket, "Prefix": f"{prefix}/"}
+        if tok:
+            kw["ContinuationToken"] = tok
+        r = s3.list_objects_v2(**kw)
+        for o in r.get("Contents", []):
+            s3.delete_object(Bucket=bucket, Key=o["Key"])
+            n += 1
+        if not r.get("IsTruncated"):
+            break
+        tok = r.get("NextContinuationToken")
+    print(f"{prefix}/ の {n}件を消した（この日の作り直しのため）")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="R2との受け渡し")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p1 = sub.add_parser("push"); p1.add_argument("local", type=Path); p1.add_argument("prefix")
     p2 = sub.add_parser("pull"); p2.add_argument("prefix"); p2.add_argument("local", type=Path)
+    p4 = sub.add_parser("clear"); p4.add_argument("prefix")
     p3 = sub.add_parser("prune"); p3.add_argument("prefix"); p3.add_argument("--days", type=int, default=7)
     a = ap.parse_args()
     if a.cmd == "push":
         return push(a.local, a.prefix)
     if a.cmd == "pull":
         return pull(a.prefix, a.local)
+    if a.cmd == "clear":
+        return clear(a.prefix)
     return prune(a.prefix, a.days)
 
 
