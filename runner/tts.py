@@ -4,7 +4,7 @@
 ★ローカルの C:\\tts\\kozue_tts.py の移植。**設定値は必ず一致させる**。
   ここがズレると、聴き比べて決めた音（速度・間・参照音声）が本番で再現されない。
 
-  SPEED=1.10 / FRAGMENT_INTERVAL=0.5 / SPLIT_METHOD="cut2"
+  ★値は v2/voice_config.py にある（ここには写さない）。
     ★cut5（読点ごとに切って貼る）には戻さないこと。読点のたびに間が空き、
       断片ごとに抑揚がリセットされて「流暢でない」音になる（2026-09-04 nordw耳判定）。
 
@@ -24,19 +24,22 @@ ROOT = Path(__file__).resolve().parent.parent
 GSV = ROOT / "gsv"
 ASSETS = ROOT / "assets"
 
-SPEED = 1.10
-FRAGMENT_INTERVAL = 0.5
-SPLIT_METHOD = "cut2"
+# ★★設定は v2/voice_config.py が正本（2026-09-05）。ここに数値を書かない。
+#   以前はここに独立した写しがあり、**実際に食い違った**:
+#   ニュース用の参照音声をローカルにだけ足していて、本番は既定の朗読のままだった。
+#   ＝nordwの「ニュースのテンションを1段階上げよう」が本番で効いていなかった。
+sys.path.insert(0, str(ROOT))
+from v2 import voice_config as VC          # noqa: E402
 
-# コーナー別の参照音声（＝喋り方）。BGMの割り当てと対になる設定。
-REF_DEFAULT = (ASSETS / "ref" / "RECITATION324_004.wav",
-               "ハイチ共和国でツーサンルーベルテュールが勝利を収められたのは"
-               "実際大熱病のおかげだった")
-REF_BY_CORNER = {
-    # OPだけ元気に（2026-09-04 nordw耳判定で5案から014に決定）
-    "talk1": (ASSETS / "ref" / "EMOTION100_014.wav",
-              "スミスさん、ピエール・デュボワをご紹介しますわ。私の親友なの。"),
-}
+SPEED = VC.SPEED
+FRAGMENT_INTERVAL = VC.FRAGMENT_INTERVAL
+SPLIT_METHOD = VC.SPLIT_METHOD
+SEED = VC.SEED
+PARALLEL_INFER = VC.PARALLEL_INFER
+# コーナー別の参照音声（＝喋り方）。ファイル名だけ正本から取り、置き場所はこちらで結合する
+_REFS = VC.resolve(ASSETS / "ref")
+REF_DEFAULT = _REFS[""]
+REF_BY_CORNER = {k: v for k, v in _REFS.items() if k}
 
 _tts = None
 
@@ -86,7 +89,10 @@ def synth(text: str, out_path: str, corner: str | None = None,
         "top_k": 5, "top_p": 1, "temperature": 1,
         "text_split_method": SPLIT_METHOD, "speed_factor": speed,
         "fragment_interval": FRAGMENT_INTERVAL,
-        "return_fragment": False, "parallel_infer": True,
+        "return_fragment": False, "parallel_infer": PARALLEL_INFER,
+        # ★seedを固定しないと同じ台本でも毎回違う音が出る（既定 -1 ＝ランダム）。
+        #   ローカルと同じ値にすること。voice_config.py が正本。
+        "seed": SEED,
     }))
     sf.write(out_path, audio, sr)
     return out_path
