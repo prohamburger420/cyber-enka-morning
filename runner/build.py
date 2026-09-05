@@ -10,8 +10,11 @@
   3. キャラクター設定を**コードから読まず assets/character.md から読む**
      （公開リポジトリにキャラ資産を置かないため）
 
-★落ちても番組を止めない。台本が作れなければフォールバック台本、
-  合成が落ちればそのブロックを飛ばす。無音の放送より、欠けた放送のほうがまし。
+★台本が作れなければフォールバック台本に倒す（番組は成立する）。
+★★ただし**音声のブロックが欠けたら、その回は納品しない**（2026-09-05 方針変更）。
+  以前は「無音の放送より欠けた放送のほうがまし」としていたが**逆だった**。
+  CEBDR24は24時間の音楽チャンネルなので、配らなければ**通常運転で曲が流れ続ける**
+  ＝誰も気づかない。欠けた番組を配ると**放送に乗って気づかれる**。
 """
 import argparse
 import datetime
@@ -42,16 +45,40 @@ def character() -> str:
     return p.read_text(encoding="utf-8").rstrip()
 
 
-def synth_segments(segs, outdir: Path, log) -> list[Path]:
-    """ブロックごとに合成。★1つ落ちても他を巻き込まない。"""
-    made = []
+def synth_segments(segs, outdir: Path, log) -> tuple[list[Path], list[str]]:
+    """ブロックごとに合成。1つ落ちても他を巻き込まないが、**落ちたことは必ず返す**。
+
+    ★2026-09-05 方針変更: 以前は「無音の放送より欠けた放送のほうがまし」としていたが、
+      **逆だった**（nordw）。CEBDR24は24時間の音楽チャンネルなので、番組を配らなければ
+      **通常運転で曲が流れ続けるだけ＝誰も気づかない**。
+      欠けた番組を配ると**放送に乗って気づかれる**。
+      → **不完全な番組は配らない。**
+    """
+    made: list[Path] = []
+    # ★欠けたブロックを覚えておく。呼び元が「配るかどうか」を決める
+    failed: list[str] = []
     for idx, (name, body) in enumerate(segs, 1):
         wav = outdir / f"seg_{idx:02d}_{name}.wav"
         t0 = time.time()
-        try:
-            tts.synth(body, str(wav), corner=name)
-        except Exception as e:
-            log.error("合成に失敗（このブロックは飛ばす） %s: %s", name, e)
+        # ★1回だけ作り直す（2026-09-05）。実際に news が1回で落ちて欠けた。
+        #   合成は外部プロセス＋モデル読み込みを伴うので、一過性の失敗がありうる。
+        err = None
+        for attempt in (1, 2):
+            try:
+                tts.synth(body, str(wav), corner=name)
+                err = None
+                break
+            except Exception as e:
+                # ★★例外の中身を必ず出す（2026-09-05）。
+                #   以前は `%s` で例外を出していたが**メッセージが空の例外**だったため、
+                #   ログに「合成に失敗（このブロックは飛ばす） news: 」とだけ残り、
+                #   **原因がまったく分からなかった**。型とトレースバックを出す。
+                import traceback
+                err = e
+                log.error("合成に失敗 %s (%d回目) %s: %s\n%s",
+                          name, attempt, type(e).__name__, e, traceback.format_exc())
+        if err is not None:
+            failed.append(name)
             continue
         import soundfile as sf
         d = sf.info(str(wav)).duration
@@ -62,7 +89,7 @@ def synth_segments(segs, outdir: Path, log) -> list[Path]:
         if cps > 8.0:
             log.warning("★%s は速すぎる（%.1f字/秒）。台本の脱落を疑う", name, cps)
         made.append(wav)
-    return made
+    return made, failed
 
 
 def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool) -> int:
@@ -116,10 +143,19 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool) 
     log.info("台本OK: %s", [s[0] for s in segs])
 
     if not no_audio:
-        made = synth_segments(segs, outdir, log)
+        made, failed = synth_segments(segs, outdir, log)
         log.info("音声 %d本", len(made))
         if not made:
             log.error("音声が1本も作れなかった")
+            return 1
+        # ★★ブロックが1つでも欠けたら**配らない**（2026-09-05 方針変更）。
+        #   実際に news が合成に失敗し、**6/7ブロックの番組が正常扱いで納品された**。
+        #   CEBDR24は24時間の音楽チャンネル。配らなければ曲が流れ続けるだけで、
+        #   誰も気づかない。欠けた番組を配ると放送に乗って気づかれる。
+        #   ⚠ ここで失敗させると、後続の「R2へ納品」ステップに進まない＝配られない。
+        if failed:
+            log.error("★ブロックが欠けたので**この回は納品しない**: %s", failed)
+            log.error("  → 番組は流れず、通常の曲が流れ続ける（意図した挙動）")
             return 1
 
     log.info("=== パス%s 完了 %.1f秒 ===", pass_name.upper(), time.time() - t0)
