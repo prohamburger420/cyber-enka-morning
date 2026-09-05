@@ -1,0 +1,37 @@
+# 使い捨ての疎通プローブ（2026-09-06）。結果が出たら消す。
+# 問い: ActionsのIPから pytchat（チャット取得本体）は通るのか？
+#   yt-dlp は bot判定で弾かれた。HTML経路は1.18MB来るのに動画IDが無い。
+#   RSSは配信中のライブを載せない。→ 残る経路を1つずつ実測する。
+name: probe
+on:
+  workflow_dispatch:
+    inputs:
+      video:
+        description: "いま配信中の動画ID"
+        required: true
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: pytchat疎通
+        run: |
+          pip install -q pytchat
+          python - <<'EOF'
+          import sys, time
+          vid = "${{ inputs.video }}"
+          try:
+              import pytchat
+              chat = pytchat.create(video_id=vid)
+              print("create OK / is_alive:", chat.is_alive())
+              t0 = time.time(); n = 0
+              while chat.is_alive() and time.time() - t0 < 40:
+                  for c in chat.get().sync_items():
+                      n += 1
+                      print("  chat:", c.author.name, c.message[:40])
+                  time.sleep(2)
+              print(f"★pytchat 実測: {n}件 / 40秒 (is_alive={chat.is_alive()})")
+          except Exception as e:
+              print(f"★pytchat 失敗: {type(e).__name__}: {e}")
+              sys.exit(1)
+          EOF
