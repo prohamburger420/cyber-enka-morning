@@ -29,7 +29,8 @@
   - M3U経由でも再生ログ・権利処理が正しく残るか
 """
 import datetime
-from pathlib import Path
+# ★PureWindowsPath を使う理由は下の vps() を見ること
+from pathlib import Path, PureWindowsPath
 
 # ★VPS上の置き場所。**ここはプロハンさんに確認が要る。**
 #   曲リスト(cyberenkaplaylist0904.csv)の Path 列が C:\CYBER_ENKA_STREAM\tracks_norm\ だった。
@@ -84,8 +85,17 @@ def build(day: datetime.date, outdir: Path, pack: dict, log,
     pl_dir.mkdir(parents=True, exist_ok=True)
 
     def vps(p: str) -> str:
-        """ここのパスを、VPS上のパスに読み替える。"""
-        return str(Path(voice_root) / day.isoformat() / Path(p).name)
+        r"""ここのパスを、VPS上のパスに読み替える。
+
+        ★★`Path` を使ってはいけない（2026-09-05 実際に納品物が壊れた）。
+          本番のランナーは **Linux** なので `Path` は POSIX 版になり、区切りが `/` になる。
+          結果、納品されたM3Uが `C:\kozue_asa/2026-09-05/seg_01_talk1.wav` という
+          **区切りの混ざったパス**になっていた。Windowsは大抵通すが、RadioDJは
+          フォーラムに「ファイル名にうるさい(finicky)」という報告がある。賭けない。
+          → `PureWindowsPath` なら**どのOSで動かしても `\` で書く**。
+        ⚠ ログの数字（M3U 11行）は正しかった。**中身は実物を取って見るまで分からない。**
+        """
+        return str(PureWindowsPath(voice_root) / day.isoformat() / Path(p).name)
 
     made = []
     for h in hours:
@@ -109,14 +119,15 @@ def build(day: datetime.date, outdir: Path, pack: dict, log,
             elif kind == "jingle":
                 # ★日付フォルダの中に置く。out/直下に1回だけ置くと
                 #   `r2.py prune --days 7` が更新日で消してしまう（毎日納品すれば消えない）。
-                lines.append(str(Path(voice_root) / day.isoformat() / "jingle1.wav"))
+                lines.append(str(PureWindowsPath(voice_root) / day.isoformat()
+                                 / "jingle1.wav"))
             else:   # song1 / song2
                 s = pack.get(kind) or {}
                 f = s.get("file")
                 if not f:
                     missing.append(kind)
                     continue
-                lines.append(str(Path(song_dir) / f))
+                lines.append(str(PureWindowsPath(song_dir) / f))
 
         if missing:
             # ★欠けたまま書かない。**欠けた番組は流さない**（build.py と同じ方針）。
@@ -155,6 +166,11 @@ def _test(log) -> None:
         assert "seg_05_mail_fb.wav" in t, "パスAはフォールバック版おたよりを指すはず"
         assert t.count("jingle1.wav") == 2, "ジングルは曲明けの2回"
         assert t.index("A.mp3") < t.index("B.mp3"), "曲の順番が入れ替わっている"
+        # ★Linuxのランナーで走らせても Windows のパスで書けているか
+        #   （ここを見ていなかったので、区切りが混ざったM3Uを一度納品した）
+        for ln in t.splitlines()[1:]:
+            assert "/" not in ln, f"区切りが混ざっている: {ln}"
+            assert ln[1:3] == ":\\", f"絶対パスになっていない: {ln}"
 
         # パスB: 本番版おたよりが来たら差し替わり、その回だけ書き直す
         (tmp / "seg_01_mail.wav").write_bytes(b"x")
