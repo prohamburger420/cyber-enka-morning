@@ -99,6 +99,20 @@ def _halves():
     return ORDER[:i], ORDER[i + 1:]
 
 
+def half_of(block: str) -> str | None:
+    """ブロック名が前半("a")か後半("b")か。ORDER に無ければ None。
+
+    ★build.py が「欠けたときにどこまで諦めるか」を決めるのに使う。
+      前半が欠けたら番組ごと配らない。**後半だけなら前半は配る**（曲へ落ちるだけ）。
+      ⚠ 判定を build.py 側に写経しない。並びを変えたとき片方だけ直る事故になる。
+    """
+    for name, part in zip(("a", "b"), _halves()):
+        for item in part:
+            if (item[0] == "seg" and item[1] == block) or item[0] == block:
+                return name
+    return None
+
+
 def _seg_path(outdir: Path, name: str) -> str | None:
     """seg_XX_<name>.(wav|mp3) を名前で探す。
 
@@ -254,6 +268,12 @@ def _test(log) -> None:
         (tmp / "seg_04_news.wav").unlink()
         m = build(day, tmp, pack, log, hours=[6])
         assert m == [], f"欠けているのに書いてしまった: {m}"
+
+        # ★half_of: build.py が「どこまで諦めるか」をこれで決める。
+        #   ⚠ ここが嘘をつくと、後半の欠けで番組ごと止まる／前半の欠けを配ってしまう
+        assert half_of("news") == "a" and half_of("song1") == "a", "前半の判定が違う"
+        assert half_of("mail") == "b" and half_of("ending") == "b", "後半の判定が違う"
+        assert half_of("そんなブロックは無い") is None
     finally:
         shutil.rmtree(tmp.parent, ignore_errors=True)
     print("★playlist: 全部通った")

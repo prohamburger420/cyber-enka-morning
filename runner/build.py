@@ -188,10 +188,20 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool,
         #   CEBDR24は24時間の音楽チャンネル。配らなければ曲が流れ続けるだけで、
         #   誰も気づかない。欠けた番組を配ると放送に乗って気づかれる。
         #   ⚠ ここで失敗させると、後続の「R2へ納品」ステップに進まない＝配られない。
+        # ★★2026-09-06: M3Uを前半・後半に割ったので、**諦める範囲も半分で済む**。
+        #   前半が欠けた → 番組ごと配らない（従来どおり）
+        #   後半だけ欠けた → **前半は配る**。後半のM3Uが書かれないので、
+        #                    曲2のあとはそのまま通常の曲へ落ちる＝方針は同じ
+        #   ⚠ どちらの半分かは playlist.half_of() に聞く。ここに写経すると、
+        #     並びを変えたとき片方だけ直る。
         if failed:
-            log.error("★ブロックが欠けたので**この回は納品しない**: %s", failed)
-            log.error("  → 番組は流れず、通常の曲が流れ続ける（意図した挙動）")
-            return 1
+            fatal = [n for n in failed if playlist.half_of(n) != "b"]
+            if fatal:
+                log.error("★前半のブロックが欠けたので**この回は納品しない**: %s", failed)
+                log.error("  → 番組は流れず、通常の曲が流れ続ける（意図した挙動）")
+                return 1
+            log.error("★後半のブロックが欠けた: %s → **前半だけ配る**", failed)
+            log.error("  → 曲2のあとは通常の曲へ落ちる（番組の前半は放送される）")
 
         # ★★放送用のM3Uを書く（2026-09-05）。RadioDJの
         #   「Load M3U Playlist by Date Mask」がこれを読む。
