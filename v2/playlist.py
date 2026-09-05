@@ -22,6 +22,29 @@
   マスクは `yyyy-MM-dd.HH` → `2026-09-05.06.m3u` / `...07.m3u` / `...08.m3u`
   パスA が3本まとめて書き、パスB が各回のおたよりを差し替えたら**その回だけ書き直す**。
 
+★★★2026-09-06 設計変更: **M3Uを前半・後半の2本に割る。**
+  nordw「**出勤や登校したあとによまれたってうれしくないの！！**」
+
+  ⚠ 直前まで「おたよりは放送の**直前**に締め切る」設計にしていた。それだと
+    6時の回に書いた人が読まれるのは7時の回。**その頃には家を出ている。**
+    `chat_collect.py` の冒頭に書いてある存在理由（「いま書いたら今すぐ読まれる」）を
+    送出の都合で殺していた。**番組の目的のほうが上。**
+
+  では放送中に差し替えられるか——**1本のM3Uでは無理**。
+  RadioDJは放送開始時にM3Uを読み込む。6:06に書き直しても**読み直されない**。
+  → **前半(playlists/)と後半(playlists_b/)に割り、イベントを2つ置く。**
+
+      6:00:00  イベント1  playlists/  を読む     … パスAが作った前半（確定済み）
+      6:08:00  イベント2  playlists_b/ を読む    … パスBが放送中に差し替えた後半
+      6:11:17  後半の再生が始まる（おたより）
+
+  ★事故に強い形になっている:
+    - 後半M3UはパスAが**フォールバック版おたよりで先に書いておく**。
+      パスBが間に合わなければ**そのまま流れる**（無音にならない）
+    - 後半が欠けても**前半は放送される**（1本だった頃は全滅していた）
+  ⚠ イベント2は `Open Positions = Bottom`。前半のキューがまだ深いうちに撃つので、
+    Auto DJ が曲を足す前に後半が積まれる。**実機で要確認**（`RADIODJ_SIYOU.md`）。
+
 ⚠ 未確認（`infra/RADIODJ_SIYOU.md` 参照）:
   - M3Uに書くパスの形式（絶対パスで書いている。VPS上で通るかは実機確認）
   - ★**VPS上の曲フォルダのパス**。下の SONG_DIR は曲リストのCSVのPath列から取ったもので、
@@ -44,17 +67,36 @@ BROADCAST_HOURS = (6, 7, 8)     # 2026-09-05 確定。めざましテレビ方�
 #   ("seg", ブロック名) … こずえの音声
 #   ("song1"/"song2")   … その日の曲
 #   ("jingle")          … 曲明けのジングル（★曲の前には入れない。2026-09-04 プロハン指示）
+#
+# ★★2026-09-06 おたよりを**曲2のあと**へ移した。理由は締切:
+#   実測の尺で並べると、元の位置（ニュースの直後）だとおたよりの再生開始が **6:08:15**。
+#   パスBは「準備3分 + チャット収集3分 + 生成3分 + 納品と同期1分半」で、
+#   VPSに届くのが **6:07頃**。margin 1分。**曲2のあとに動かすと 6:11:17 になり 3分増える。**
+#   ⚠ 台本の文言も直すこと（generate_v2.py の「ニュースのあとで読む」→「二曲目のあとで読む」）
+#
+# ★("split",) から後ろが「後半」＝放送中に差し替わる部分。ここより前は放送開始時に確定。
 ORDER = [
     ("seg", "talk1"),
     ("song1",), ("jingle",),
     ("seg", "traffic"),
     ("seg", "sa"),
     ("seg", "news"),
-    ("mail",),                   # パスBの本番版があればそれ、無ければ mail_fb
     ("song2",), ("jingle",),
+    ("split",),                  # ←★ここで前半・後半が分かれる
+    ("mail",),                   # パスBの本番版があればそれ、無ければ mail_fb
     ("seg", "uranai"),
     ("seg", "ending"),
 ]
+
+# 前半／後半それぞれの置き場所。RadioDJの日付マスクは同じ `yyyy-MM-dd.HH` のまま、
+# **フォルダを2つに分けて**イベントを2つ置く（マスクを増やさなくて済む）。
+PL_DIR = {"a": "playlists", "b": "playlists_b"}
+
+
+def _halves():
+    """ORDER を ("split",) で前半・後半に割る。"""
+    i = ORDER.index(("split",))
+    return ORDER[:i], ORDER[i + 1:]
 
 
 def _seg_path(outdir: Path, name: str) -> str | None:
@@ -74,16 +116,16 @@ def _seg_path(outdir: Path, name: str) -> str | None:
 
 def build(day: datetime.date, outdir: Path, pack: dict, log,
           hours=BROADCAST_HOURS, voice_root: str = VOICE_ROOT,
-          song_dir: str = SONG_DIR) -> list[Path]:
+          song_dir: str = SONG_DIR, halves=("a", "b")) -> list[Path]:
     """その日のM3Uを放送回ごとに書く。書けたファイルの一覧を返す。
 
     ★VPS上のパスで書く。ここ(Actions)のパスではない。
       ローカルの outdir は `out/2026-09-05/` だが、VPSでは
       `C:\\kozue_asa\\2026-09-05\\` に降りてくる。
-    """
-    pl_dir = outdir.parent / "playlists"
-    pl_dir.mkdir(parents=True, exist_ok=True)
 
+    halves: 書く側を選ぶ。パスAは両方、**パスBは後半だけ**（前半は既に放送済み・
+            書き換えても読み直されないので触らない）。
+    """
     def vps(p: str) -> str:
         r"""ここのパスを、VPS上のパスに読み替える。
 
@@ -97,11 +139,10 @@ def build(day: datetime.date, outdir: Path, pack: dict, log,
         """
         return str(PureWindowsPath(voice_root) / day.isoformat() / Path(p).name)
 
-    made = []
-    for h in hours:
-        lines = ["#EXTM3U"]
-        missing = []
-        for item in ORDER:
+    def render(part) -> tuple[list[str], list[str]]:
+        """並びを行に落とす。(行, 欠けているもの) を返す。"""
+        lines, missing = ["#EXTM3U"], []
+        for item in part:
             kind = item[0]
             if kind == "seg":
                 p = _seg_path(outdir, item[1])
@@ -128,18 +169,27 @@ def build(day: datetime.date, outdir: Path, pack: dict, log,
                     missing.append(kind)
                     continue
                 lines.append(str(PureWindowsPath(song_dir) / f))
+        return lines, missing
 
+    parts = dict(zip(("a", "b"), _halves()))
+    made = []
+    for half in halves:
+        pl_dir = outdir.parent / PL_DIR[half]
+        pl_dir.mkdir(parents=True, exist_ok=True)
+        lines, missing = render(parts[half])
         if missing:
             # ★欠けたまま書かない。**欠けた番組は流さない**（build.py と同じ方針）。
             #   M3Uが無ければ RadioDJ は何も差し込まず、曲が流れ続ける。
-            log.error("★%d時のM3Uは書かない。欠けている: %s", h, missing)
+            # ★2026-09-06: 前半・後半で独立に判断する。**後半が欠けても前半は流す。**
+            #   （1本だった頃は、占いが1本欠けただけで番組が全滅していた）
+            log.error("★%s のM3Uは書かない。欠けている: %s", PL_DIR[half], missing)
             continue
-
-        # マスク `yyyy-MM-dd.HH` に合わせる
-        p = pl_dir / f"{day.isoformat()}.{h:02d}.m3u"
-        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        made.append(p)
-        log.info("M3U %s (%d行)", p.name, len(lines) - 1)
+        for h in hours:
+            # マスク `yyyy-MM-dd.HH` に合わせる
+            p = pl_dir / f"{day.isoformat()}.{h:02d}.m3u"
+            p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            made.append(p)
+            log.info("M3U %s/%s (%d行)", PL_DIR[half], p.name, len(lines) - 1)
     return made
 
 
@@ -161,27 +211,49 @@ def _test(log) -> None:
             (tmp / f"seg_{i:02d}_{n}.wav").write_bytes(b"x")
 
         made = build(day, tmp, pack, log)
-        assert len(made) == 3, f"パスAは6/7/8の3本書くはず: {made}"
-        t = made[0].read_text(encoding="utf-8")
-        assert "seg_05_mail_fb.wav" in t, "パスAはフォールバック版おたよりを指すはず"
-        assert t.count("jingle1.wav") == 2, "ジングルは曲明けの2回"
-        assert t.index("A.mp3") < t.index("B.mp3"), "曲の順番が入れ替わっている"
+        assert len(made) == 6, f"パスAは前半3本＋後半3本の6本書くはず: {made}"
+        A = {p for p in made if p.parent.name == "playlists"}
+        B = {p for p in made if p.parent.name == "playlists_b"}
+        assert len(A) == 3 and len(B) == 3, (A, B)
+
+        ta = sorted(A)[0].read_text(encoding="utf-8")
+        tb = sorted(B)[0].read_text(encoding="utf-8")
+        # ★前半に**おたよりが入っていない**こと。ここが崩れると放送中の差し替えが効かない
+        assert "mail" not in ta, f"おたよりが前半に混ざっている:\n{ta}"
+        assert "seg_05_mail_fb.wav" in tb, "後半はフォールバック版おたよりを指すはず"
+        assert ta.count("jingle1.wav") == 2, "ジングルは曲明けの2回。両方とも前半"
+        assert ta.index("A.mp3") < ta.index("B.mp3"), "曲の順番が入れ替わっている"
+        # ★前半＋後半で7ブロック全部が1回ずつ出ること（割った拍子に落とさない）
+        both = ta + tb
+        for n in ["talk1", "traffic", "sa", "news", "mail", "uranai", "ending"]:
+            assert both.count(f"_{n}") == 1, f"{n} が {both.count(f'_{n}')} 回"
         # ★Linuxのランナーで走らせても Windows のパスで書けているか
         #   （ここを見ていなかったので、区切りが混ざったM3Uを一度納品した）
-        for ln in t.splitlines()[1:]:
-            assert "/" not in ln, f"区切りが混ざっている: {ln}"
-            assert ln[1:3] == ":\\", f"絶対パスになっていない: {ln}"
+        for t in (ta, tb):
+            for ln in t.splitlines()[1:]:
+                assert "/" not in ln, f"区切りが混ざっている: {ln}"
+                assert ln[1:3] == ":\\", f"絶対パスになっていない: {ln}"
 
-        # パスB: 本番版おたよりが来たら差し替わり、その回だけ書き直す
+        # パスB: 本番版おたよりが来たら差し替わる。★**後半しか書き直さない**
         (tmp / "seg_01_mail.wav").write_bytes(b"x")
-        b = build(day, tmp, pack, log, hours=[7])
-        assert len(b) == 1 and b[0].name.endswith(".07.m3u"), b
-        tb = b[0].read_text(encoding="utf-8")
-        assert "seg_01_mail.wav" in tb and "mail_fb" not in tb, "おたよりが差し替わっていない"
+        b = build(day, tmp, pack, log, hours=[7], halves=["b"])
+        assert len(b) == 1 and b[0].parent.name == "playlists_b" \
+            and b[0].name.endswith(".07.m3u"), b
+        t7 = b[0].read_text(encoding="utf-8")
+        assert "seg_01_mail.wav" in t7 and "mail_fb" not in t7, "おたよりが差し替わっていない"
+        # ★前半は触っていないこと（放送開始時に読まれてしまっているので書き換え禁止）
+        assert sorted(A)[0].read_text(encoding="utf-8") == ta, "パスBが前半を書き換えた"
 
         # 欠けたら書かない（＝配らない＝曲が流れ続ける）
+        # ★★2026-09-06: **後半が欠けても前半は書く**。片方だけ諦める
+        (tmp / "seg_06_uranai.wav").unlink()
+        m = build(day, tmp, pack, log, hours=[6])
+        assert [p.parent.name for p in m] == ["playlists"], \
+            f"後半が欠けたのに前半まで止めた／後半を書いた: {m}"
+        # 前半が欠けたら、その回は前半ごと出さない
         (tmp / "seg_04_news.wav").unlink()
-        assert build(day, tmp, pack, log, hours=[6]) == [], "欠けているのに書いてしまった"
+        m = build(day, tmp, pack, log, hours=[6])
+        assert m == [], f"欠けているのに書いてしまった: {m}"
     finally:
         shutil.rmtree(tmp.parent, ignore_errors=True)
     print("★playlist: 全部通った")

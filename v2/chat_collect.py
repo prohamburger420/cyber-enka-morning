@@ -3,7 +3,10 @@
 
 ★番組での役割
   talk1で「テーマ決めたから**チャット欄に書いて**ちょうだい、この後の曲の間にね」と募集し、
-  曲1が流れている間にここで拾って、同じ回の後半（交通情報の後）で読む。
+  曲1が流れている間にここで拾って、**同じ回の後半（曲2のあと）で読む**。
+  ⚠ 2026-09-06、一度これを「放送の直前に締め切る」設計に変えてしまった。
+    nordw「**出勤や登校したあとによまれたってうれしくないの！！**」で差し戻し。
+    送出の都合で締切を前倒しすると、この部品の存在理由が消える。
   ＝「いま書いたら今すぐ読まれる」を成立させる部品。
 
 ★設計の要点
@@ -39,6 +42,14 @@ def resolve_live_video_id(url: str = CHANNEL_LIVE_URL) -> str | None:
 
     ★動画IDを固定で持たない。24時間配信は再起動のたびにIDが変わるため
       （実測: o2E50roMd3g は 2026-09-04 16:58 開始の回）。
+
+    ⚠★★理由を握りつぶさない（2026-09-06 これで丸一日ダマされた）。
+      本番のランナーに **yt-dlp が入っていなかった**（pip install の行に無い）。
+      FileNotFoundError が `except Exception: return None` に吸われ、
+      呼び元は「配信中の動画が見つからない」と表示していた。
+      ＝**自分の入れ忘れを、配信が止まっているせいにしていた。**
+      しかも失敗まで0.02秒。ネットワークに行っていないのに気づけたはずだった。
+      → 例外も、yt-dlpのstderrも、**必ず出す**。
     """
     try:
         r = subprocess.run(
@@ -46,11 +57,27 @@ def resolve_live_video_id(url: str = CHANNEL_LIVE_URL) -> str | None:
              "--print", "%(id)s|%(is_live)s", url],
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=120)
+    except FileNotFoundError:
+        print("★yt-dlp が入っていない（配信の有無は判定できていない）", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"★yt-dlp の実行に失敗: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
+    if r.returncode != 0:
+        print(f"★yt-dlp が終了コード{r.returncode}: "
+              f"{(r.stderr or '').strip()[:300]}", file=sys.stderr)
+        return None
+    try:
         line = (r.stdout or "").strip().splitlines()[0]
         vid, is_live = line.split("|")
-        return vid if is_live == "True" else None
     except Exception:
+        print(f"★yt-dlp の出力が読めない: {(r.stdout or '')[:200]!r}", file=sys.stderr)
         return None
+    if is_live != "True":
+        print(f"★動画は見つかったが配信中ではない: {vid} (is_live={is_live})",
+              file=sys.stderr)
+        return None
+    return vid
 
 
 def collect(video_id: str, seconds: int, limit: int = 40,

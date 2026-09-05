@@ -207,9 +207,13 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool,
             return 1
         import shutil
         shutil.copy2(jin, outdir / "jingle1.wav")
+        # ★★パスBは**後半だけ**書き直す（2026-09-06）。
+        #   前半は放送開始時にRadioDJが既に読み込んでいるので、書き換えても読み直されない。
+        #   触ると「直したつもりで直っていない」を作るだけなので、halves で明示的に外す。
         made_m3u = playlist.build(
             day, outdir, pack, log,
-            hours=playlist.BROADCAST_HOURS if pass_name == "a" else [hour])
+            hours=playlist.BROADCAST_HOURS if pass_name == "a" else [hour],
+            halves=("a", "b") if pass_name == "a" else ("b",))
         if not made_m3u:
             log.error("★M3Uが1本も書けなかった → この回は納品しない")
             return 1

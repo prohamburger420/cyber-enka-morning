@@ -83,7 +83,14 @@ jobs:
           pip install -q torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
           grep -vE 'onnxruntime-gpu|^torchaudio' gsv/requirements.txt > req.txt
           pip install -q -r req.txt
-          pip install -q boto3 anthropic pytchat 'numpy==1.26.4' 'transformers==4.50.0' 'soundfile==0.14.0'
+          # ⚠★★yt-dlp を忘れていた（2026-09-06 発覚）。chat_collect.py は
+          #   「いま配信中の動画ID」を **yt-dlpのCLI** で引く。入っていないので
+          #   FileNotFoundError → 握りつぶし → 「配信中の動画が見つからない」。
+          #   ＝**おたよりは本番で一度も取れていなかった。**
+          pip install -q boto3 anthropic pytchat yt-dlp 'numpy==1.26.4' 'transformers==4.50.0' 'soundfile==0.14.0'
+          # ★ffmpegと同じ轍を踏まないよう、**入ったことをここで確かめる**。
+          #   （`|` を使わない。パイプの終了コードは右側のものになる）
+          command -v yt-dlp
 
       # ★★BGMのミックスに ffmpeg/ffprobe が要る（2026-09-05 実測）。
       #   ⚠ **ubuntu-latest には入っていない。** 「入っているはず」で書いて落ちた。
@@ -191,7 +198,12 @@ jobs:
           D=out/$(TZ=Asia/Tokyo date +%F)
           mkdir -p "$D"
           echo "準備完了。${WARM_WAIT}秒かけてチャットを集める → $D/chat_live.json"
-          python v2/chat_collect.py --seconds "$WARM_WAIT" --out "$D/chat_live.json"
+          # ★★失敗を**実行サマリの先頭に出す**（2026-09-06）。
+          #   continue-on-error は「番組を止めない」ために要る。だが緑のまま
+          #   埋もれると、**おたよりが一度も取れていないことに気づけない**（実際に起きた）。
+          #   ::warning:: はGitHubのUIで run のページ最上部に出る。
+          python v2/chat_collect.py --seconds "$WARM_WAIT" --out "$D/chat_live.json" \
+            || { echo "::warning title=チャット取得に失敗::おたよりはフォールバック版になります"; exit 1; }
 
       - name: 台本と音声を作る
         run: |

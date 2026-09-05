@@ -40,6 +40,19 @@ def client():
         os.environ["R2_BUCKET"]
 
 
+# ★★8MBを超えると boto3 は勝手にマルチパートに切り替える。その objectの ETag は
+#   **MD5ではなくなる**（"<hash>-<パート数>" 形式）ので、下の「中身が同じなら送らない」
+#   判定が**必ず外れる**。2026-09-06 の実測: 8MB未満の4本は正しく飛ばし、
+#   8MB以上の4本（talk1/news/uranai/ending 計41MB）を**毎回上げ直していた**。
+#   ⚠ 上の push() のコメントに「単一PUT時」と自分で書いておきながら塞いでいなかった。
+#   → 閾値を上げて必ず単一PUTにする。R2は単一PUTで5GBまで受ける。
+#   ⚠ 既にマルチパートで置いてある object は、この修正後の**初回だけ**上げ直しになる
+#     （単一PUTで置き直るので、2回目からは一致する）。
+def _xfer():
+    from boto3.s3.transfer import TransferConfig
+    return TransferConfig(multipart_threshold=4 << 30)   # 4GiB
+
+
 def _md5(p: Path) -> str:
     h = hashlib.md5()
     with open(p, "rb") as f:
@@ -51,22 +64,31 @@ def _md5(p: Path) -> str:
 def push(local: Path, prefix: str) -> int:
     """localの中身を prefix/ 以下へ。中身が同じものは送らない。"""
     s3, bucket = client()
-    n = skipped = 0
+    n = skipped = multi = 0
     for p in sorted(local.rglob("*")):
         if not p.is_file():
             continue
         key = f"{prefix}/{p.relative_to(local).as_posix()}"
         try:                      # ★同じ中身なら送らない（ETagはMD5と一致する・単一PUT時）
             head = s3.head_object(Bucket=bucket, Key=key)
-            if head["ETag"].strip('"') == _md5(p):
+            etag = head["ETag"].strip('"')
+            if etag == _md5(p):
                 skipped += 1
                 continue
+            # ★見張り: マルチパートのETagは "<hash>-<パート数>" になり、MD5と一致しない。
+            #   ＝この object は中身が同じでも毎回上げ直しになる。数えて最後に出す。
+            if "-" in etag:
+                multi += 1
         except Exception:
             pass
-        s3.upload_file(str(p), bucket, key)
+        s3.upload_file(str(p), bucket, key, Config=_xfer())
         print(f"  上げた {key} ({p.stat().st_size/1048576:.1f}MB)", flush=True)
         n += 1
     print(f"送信 {n}件 / 変化なし {skipped}件")
+    if multi:
+        # 修正後の初回だけ出るのが正常。2回目以降も出続けたら単一PUTになっていない
+        print(f"  ⚠ うち {multi}件はマルチパートのETagだったので同一判定できなかった"
+              f"（単一PUTで置き直したので、次回からは飛ばせるはず）")
     return 0
 
 
