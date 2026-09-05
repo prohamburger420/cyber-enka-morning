@@ -213,7 +213,9 @@ def collect_api(video_id: str, seconds: int, limit: int = 40,
                   "maxResults": 200}
             if token:
                 kw["pageToken"] = token
-            r = _api("liveChatMessages", **kw)
+            # ⚠ HTTPのパスは `liveChat/messages`。リソース名の `liveChatMessages` を
+            #   そのまま書くと**本文が空の404**が返る（2026-09-06 実際に踏んだ）。
+            r = _api("liveChat/messages", **kw)
             token = r.get("nextPageToken")
             for it in r.get("items", []):
                 sn = it["snippet"]
