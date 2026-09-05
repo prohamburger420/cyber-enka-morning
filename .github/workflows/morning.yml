@@ -4,6 +4,22 @@
 # いまは手動起動のみ。★放送時刻が未確定なので schedule はまだ入れない。
 name: morning
 on:
+  # ★★パスAだけ自動起動する（2026-09-05 放送時刻が6/7/8時に確定）。
+  #   放送は6時・7時・8時の3回。同じ本編を3回流し、おたより(パスB)だけ各回で作り直す。
+  #   パスAは 20:10 UTC = **朝5時10分（日本時間）** に起動。
+  #   実測でパスA全体が14分前後なので、6時の放送まで35分以上の余裕がある。
+  #
+  #   ⚠★★パスBは cron で組めない。GitHub公式が明記している:
+  #     「schedule イベントは高負荷時に遅延する。**高負荷の時間帯には毎時0分が含まれる**。
+  #       負荷が十分高い場合、**キューされたジョブが破棄されることがある**」
+  #     放送は毎時0分ちょうど＝一番混む時刻。そこに一番シビアな処理は置けない。
+  #     （曲1が流れている数分の間に間に合わせる必要がある）
+  #   → パスBの起動方法は別途決める。候補: VPS側から時刻を見て
+  #     workflow_dispatch を叩く（cronの遅延を受けない）。**未決。**
+  #
+  #   ⚠ 5時10分を選んだのは、毎時0分の混雑を外すため。0分ちょうどにしない。
+  schedule:
+    - cron: "10 20 * * *"
   workflow_dispatch:
     inputs:
       pass:
@@ -26,6 +42,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
+      # ★★cron起動では inputs が空になる（workflow_dispatch の入力は渡らない）。
+      #   そのまま inputs.pass を使うと `--pass ` が引数なしになり、
+      #   `if: inputs.pass == 'a'` も偽になって「その日のフォルダを空にする」が飛ぶ。
+      #   → 空なら既定値に倒す形に統一する。**自動起動は必ずパスA。**
+      PASS: ${{ inputs.pass || 'a' }}
+      WARM_WAIT: ${{ inputs.warm_wait || '0' }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -102,17 +124,17 @@ jobs:
       #     機能していなかった。**静かに壊れていた**ので、緑のまま気づけなかった。
       #   ★落ちても番組は止めない。0件なら「おたよりゼロの回」として進む。
       - name: 放送を待ちながらチャットを集める
-        if: inputs.pass == 'b' && inputs.warm_wait != '0'
+        if: env.PASS == 'b' && env.WARM_WAIT != '0'
         continue-on-error: true
         run: |
           D=out/$(TZ=Asia/Tokyo date +%F)
           mkdir -p "$D"
-          echo "準備完了。${{ inputs.warm_wait }}秒かけてチャットを集める → $D/chat_live.json"
-          python v2/chat_collect.py --seconds ${{ inputs.warm_wait }} --out "$D/chat_live.json"
+          echo "準備完了。${WARM_WAIT}秒かけてチャットを集める → $D/chat_live.json"
+          python v2/chat_collect.py --seconds "$WARM_WAIT" --out "$D/chat_live.json"
 
       - name: 台本と音声を作る
         run: |
-          python -m runner.build --pass ${{ inputs.pass }} ${{ inputs.no_audio && '--no-audio' || '' }}
+          python -m runner.build --pass "$PASS" ${{ inputs.no_audio && '--no-audio' || '' }}
 
       # ★台帳の書き戻しは納品より先。ここが落ちても納品は済ませたい…わけではなく、
       #   逆に「読んだのに記録が残らない」と翌朝また同じ話題を読む。だから先に確実に戻す。
@@ -128,7 +150,7 @@ jobs:
       #   ので一見そろって見える。prune は7日より古いものしか消さないので拾えない。
       #   ⚠ パスBでは絶対に呼ばない（パスAが作ったものを消してしまう）。
       - name: この日のフォルダを空にする（パスAのみ）
-        if: inputs.pass == 'a'
+        if: env.PASS == 'a'
         run: python infra/r2.py clear "out/$(TZ=Asia/Tokyo date +%F)"
 
       - name: R2へ納品
@@ -140,6 +162,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: morning-${{ inputs.pass }}
+          name: morning-${{ inputs.pass || 'a' }}
           path: out/
           if-no-files-found: error
