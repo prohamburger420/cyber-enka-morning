@@ -209,14 +209,18 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool,
         #   流れる曲が必ず一致する（`infra/RADIODJ_SIYOU.md` に調査の全文）。
         #   ⚠ M3Uが無ければRadioDJは何も差し込まず、Auto DJの曲が流れ続ける
         #     ＝事故の時に無音にならない（イベントの Open Positions を `Top` にすること）。
-        jin = ASSETS / "bgm" / "jingle1.wav"
-        if not jin.exists():
+        # ★★ジングルは複数ありうる（2026-09-06 nordw指摘）。assets/bgm/jingle*.wav を全部配る。
+        #   どれを使うかは playlist.py が**日付から**決める（ランダムにしない＝再現できる）。
+        jins = sorted((ASSETS / "bgm").glob("jingle*.wav"))
+        if not jins:
             # ★ここは警告で済ませない。M3Uに書いた行のファイルが無い状態を作ると、
             #   放送中にRadioDJがそこで詰まる。**欠けた番組は配らない**の方針どおり止める。
-            log.error("★ジングルが無い: %s → この回は納品しない", jin)
+            log.error("★ジングルが1本も無い: %s → この回は納品しない", ASSETS / "bgm")
             return 1
         import shutil
-        shutil.copy2(jin, outdir / "jingle1.wav")
+        for j in jins:
+            shutil.copy2(j, outdir / j.name)
+        log.info("ジングル %d本: %s", len(jins), [j.name for j in jins])
         # ★★パスBは**後半だけ**書き直す（2026-09-06）。
         #   前半は放送開始時にRadioDJが既に読み込んでいるので、書き換えても読み直されない。
         #   触ると「直したつもりで直っていない」を作るだけなので、halves で明示的に外す。

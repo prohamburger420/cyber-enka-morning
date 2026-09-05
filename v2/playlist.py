@@ -92,6 +92,23 @@ ORDER = [
 # **フォルダを2つに分けて**イベントを2つ置く（マスクを増やさなくて済む）。
 PL_DIR = {"a": "playlists", "b": "playlists_b"}
 
+# ============================================================
+# ★★ジングル（2026-09-06 nordw
+#   「いろんなサイバー演歌歌手のバージョンがあって、**なにが流れるかが局のたのしみの
+#     ひとつにもなってる**んだよ。楽曲と一緒においてあるはず」）
+#
+# ⚠★**ここに入れるファイル名がまだ分からない。** 手元の曲リスト(assets/songs.json 805件)は
+#   最短99秒＝**全部フル楽曲**で、ジングルは1本も含まれていない。
+#   VPSの SONG_DIR にあるはずなので、**プロハンさんにファイル名の一覧をもらう**。
+#     `dir C:\CYBER_ENKA_STREAM\tracks_norm\*ジングル* /b` のような形で
+#   → ここに並べるだけで日替わりで回り始める（他は何も直さなくてよい）。
+#
+# それまでは、こちらが配っている唯一の1本で回す（＝いまと同じ音）。
+FALLBACK_JINGLE = "jingle1.wav"
+JINGLES = [FALLBACK_JINGLE]
+
+SEP = "\\"      # ★テストでファイル名を切り出す用（本文は PureWindowsPath 任せ）
+
 
 def _halves():
     """ORDER を ("split",) で前半・後半に割る。"""
@@ -156,6 +173,7 @@ def build(day: datetime.date, outdir: Path, pack: dict, log,
     def render(part) -> tuple[list[str], list[str]]:
         """並びを行に落とす。(行, 欠けているもの) を返す。"""
         lines, missing = ["#EXTM3U"], []
+        jingle_i = 0        # この半分の中で何本目のジングルか
         for item in part:
             kind = item[0]
             if kind == "seg":
@@ -174,8 +192,19 @@ def build(day: datetime.date, outdir: Path, pack: dict, log,
             elif kind == "jingle":
                 # ★日付フォルダの中に置く。out/直下に1回だけ置くと
                 #   `r2.py prune --days 7` が更新日で消してしまう（毎日納品すれば消えない）。
-                lines.append(str(PureWindowsPath(voice_root) / day.isoformat()
-                                 / "jingle1.wav"))
+                # ★★2026-09-06: ジングルは**サイバー演歌歌手ごとに何種類もある**
+                #   （nordw「なにが流れるかが局のたのしみのひとつにもなってる」）。
+                #   ⚠ ランダムにしない。**日付から決める**ので、同じ日に何度作り直しても
+                #     同じになる（パスAとパスBで食い違わない／あとから再現できる）。
+                #   ★1回の放送に2回出るので、**2回目は次のもの**にする（同じ回で連続しない）。
+                nj = len(JINGLES)
+                j = JINGLES[(day.toordinal() * 2 + jingle_i) % nj]
+                # ⚠ jingle1.wav（こちらが配る唯一の1本）だけは日付フォルダの中。
+                #   歌手ぶんのジングルは**曲と同じフォルダ**にある（＝こちらは配らない）。
+                lines.append(str((PureWindowsPath(voice_root) / day.isoformat() / j)
+                                 if j == FALLBACK_JINGLE
+                                 else (PureWindowsPath(song_dir) / j)))
+                jingle_i += 1
             else:   # song1 / song2
                 s = pack.get(kind) or {}
                 f = s.get("file")
@@ -274,6 +303,35 @@ def _test(log) -> None:
         assert half_of("news") == "a" and half_of("song1") == "a", "前半の判定が違う"
         assert half_of("mail") == "b" and half_of("ending") == "b", "後半の判定が違う"
         assert half_of("そんなブロックは無い") is None
+
+        # ★ジングル: **JINGLESに名前を並べるだけで日替わりで回り始める**こと。
+        #   ⚠ ここが効かないと、プロハンさんから名前をもらった日に
+        #     「並べたのに回らない」で詰まる。名前が来る前に通しておく。
+        for n in ("seg_04_news.wav", "seg_06_uranai.wav"):
+            (tmp / n).write_bytes(b"x")          # さっき消したので戻す
+        g = globals()
+        g["JINGLES"] = ["Jア.mp3", "Jイ.mp3", "Jウ.mp3"]
+        try:
+            got = {}
+            for dd in (datetime.date(2026, 9, 5), datetime.date(2026, 9, 6),
+                       datetime.date(2026, 9, 7)):
+                t = build(dd, tmp, pack, log, hours=[6], halves=["a"])[0] \
+                    .read_text(encoding="utf-8")
+                js = [ln for ln in t.splitlines() if ln.rsplit(SEP, 1)[-1] in JINGLES]
+                assert len(js) == 2, f"ジングルが2本出ていない: {js}"
+                assert js[0] != js[1], f"同じ回で同じジングルが2回: {js}"
+                # ★歌手ぶんは**曲と同じフォルダ**を指すこと（こちらは配らないので）
+                for ln in js:
+                    assert ln.startswith(SONG_DIR), f"曲フォルダを指していない: {ln}"
+                got[dd.isoformat()] = tuple(js)
+            assert len(set(got.values())) == 3, f"日替わりになっていない: {got}"
+        finally:
+            g["JINGLES"] = [FALLBACK_JINGLE]
+        # ★名前をもらうまでの既定: 1本だけ＝従来どおり、**日付フォルダのほう**を指す
+        t = build(day, tmp, pack, log, hours=[6], halves=["a"])[0].read_text(encoding="utf-8")
+        assert t.count("jingle1.wav") == 2, "1本のときは従来どおりのはず"
+        assert all(ln.startswith(VOICE_ROOT) for ln in t.splitlines()
+                   if ln.endswith("jingle1.wav")), "既定の1本は日付フォルダのはず"
     finally:
         shutil.rmtree(tmp.parent, ignore_errors=True)
     print("★playlist: 全部通った")
