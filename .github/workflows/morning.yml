@@ -289,11 +289,21 @@ jobs:
       #   **RadioDJに別の回のブロックが流れる**。しかも「エンディングだけ古いものが残る」
       #   ので一見そろって見える。prune は7日より古いものしか消さないので拾えない。
       #   ⚠ パスBでは絶対に呼ばない（パスAが作ったものを消してしまう）。
+      #   ⚠★★`no_audio` のときも絶対に呼ばない（2026-09-06 実際に消した）。
+      #     台本だけ見たくて `force=true -f no_audio=true` で走らせたら、
+      #     **その日の音声7本とジングルを消して、台本だけをR2に置いた**。
+      #     M3Uは別フォルダなので残り、**中身のファイルが無いM3U**という
+      #     一番危ない状態（放送したら無音）を作った。
+      #     ＝`no_audio` は「台本の下見」であって、納品ではない。
       - name: この日のフォルダを空にする（パスAのみ）
-        if: env.PASS == 'a'
+        if: env.PASS == 'a' && !inputs.no_audio
         run: python infra/r2.py clear "out/$(TZ=Asia/Tokyo date +%F)"
 
+      # ⚠★`no_audio` は下見なので**納品しない**。音声の無い成果物をR2へ流すと、
+      #   VPSがそれを降ろして、その日の音声を欠けた状態にする。
+      #   台本は下の「結果を持ち帰る」（Actionsのartifact）で受け取れる。
       - name: R2へ納品
+        if: ${{ !inputs.no_audio }}
         run: |
           python infra/r2.py push out out
           python infra/r2.py prune out --days 7
