@@ -36,14 +36,28 @@
 
       6:00:00  イベント1  playlists/  を読む     … パスAが作った前半（確定済み）
       6:08:00  イベント2  playlists_b/ を読む    … パスBが放送中に差し替えた後半
-      6:11:17  後半の再生が始まる（おたより）
 
   ★事故に強い形になっている:
     - 後半M3UはパスAが**フォールバック版おたよりで先に書いておく**。
       パスBが間に合わなければ**そのまま流れる**（無音にならない）
     - 後半が欠けても**前半は放送される**（1本だった頃は全滅していた）
-  ⚠ イベント2は `Open Positions = Bottom`。前半のキューがまだ深いうちに撃つので、
-    Auto DJ が曲を足す前に後半が積まれる。**実機で要確認**（`RADIODJ_SIYOU.md`）。
+
+  ★★★イベントの中身（2026-09-06 確定。プロハンさんの実機回答とv2.0.4.7のスクショで）:
+    ⚠ 単純な Bottom では成立しない。**Auto DJ が常に8曲をキューに保持している**
+      （プロハンさん実測「現在流れている曲を除き、8曲が常にキューに入っています」）。
+      後半を Bottom で足すと [前半の残り, AutoDJの8曲(約30分), 後半] になり、
+      おたよりが6:40頃に流れる。→ **番組の間だけ Auto DJ を止める**。
+    前半イベント(6:00:00)のアクション（この順）:
+      1 Disable AutoDJ / 2 Clear Playlist / 3 Load M3U By Date Mask(playlists, Top)
+      / 4 Start Playing
+    後半イベント(6:08:00)のアクション:
+      1 Load M3U By Date Mask(playlists_b, Bottom) / 2 Enable AutoDJ
+      ★Enable が後半の下に8曲を補充する＝エンディング後、自然に曲へ戻る。
+      ★後半M3Uが無い日も Enable は走る＝6:08以降の無音を必ず塞ぐ栓になっている。
+    ⚠ この形の代償: 番組が丸ごと無い日は、6:00の Clear+Disable で
+      **再生中の曲が終わってから6:08まで無音**になりうる。
+      → VPSの見張り(5:30)が「番組が無い」と気づいたら**緊急M3U**（曲フォルダから
+        機械的に選んだ4曲）を書いて塞ぐ（`kozue_bangumi.ps1` Watch）。
 
 ⚠ 未確認（`infra/RADIODJ_SIYOU.md` 参照）:
   - M3Uに書くパスの形式（絶対パスで書いている。VPS上で通るかは実機確認）
@@ -97,17 +111,17 @@ PL_DIR = {"a": "playlists", "b": "playlists_b"}
 #   「いろんなサイバー演歌歌手のバージョンがあって、**なにが流れるかが局のたのしみの
 #     ひとつにもなってる**んだよ。楽曲と一緒においてあるはず」）
 #
-# ⚠★**ここに入れるファイル名がまだ分からない。** 手元の曲リスト(assets/songs.json 805件)は
-#   最短99秒＝**全部フル楽曲**で、ジングルは1本も含まれていない。
-#   VPSの SONG_DIR にあるはずなので、**プロハンさんにファイル名の一覧をもらう**。
-#     `dir C:\CYBER_ENKA_STREAM\tracks_norm\*ジングル* /b` のような形で
-#   → ここに並べるだけで日替わりで回り始める（他は何も直さなくてよい）。
-#
-# それまでは、こちらが配っている唯一の1本で回す（＝いまと同じ音）。
+# ★2026-09-06 プロハンさん回答で確定。曲とは**別フォルダ**だった。
+JINGLE_DIR = r"C:\CYBER_ENKA_STREAM\jingles"
+# JINGLE_01.mp3 〜 JINGLE_12.mp3 の12本。
+# ⚠★**02と07は使わない**（プロハンさん指示）。こずえのジングルだが、
+#   **現在の喋り声と違う**ため。番組本編のこずえと声が変わってしまう。
+JINGLES = [f"JINGLE_{i:02d}.mp3" for i in range(1, 13) if i not in (2, 7)]
+# こちらが配る1本。ジングルが1本も指定されていない時の保険として残す
 FALLBACK_JINGLE = "jingle1.wav"
-JINGLES = [FALLBACK_JINGLE]
 
 SEP = "\\"      # ★テストでファイル名を切り出す用（本文は PureWindowsPath 任せ）
+REAL_JINGLES = list(JINGLES)   # ★テストが差し替えたあと本番設定に戻すため
 
 
 def _halves():
@@ -203,7 +217,7 @@ def build(day: datetime.date, outdir: Path, pack: dict, log,
                 #   歌手ぶんのジングルは**曲と同じフォルダ**にある（＝こちらは配らない）。
                 lines.append(str((PureWindowsPath(voice_root) / day.isoformat() / j)
                                  if j == FALLBACK_JINGLE
-                                 else (PureWindowsPath(song_dir) / j)))
+                                 else (PureWindowsPath(JINGLE_DIR) / j)))
                 jingle_i += 1
             else:   # song1 / song2
                 s = pack.get(kind) or {}
@@ -264,7 +278,9 @@ def _test(log) -> None:
         # ★前半に**おたよりが入っていない**こと。ここが崩れると放送中の差し替えが効かない
         assert "mail" not in ta, f"おたよりが前半に混ざっている:\n{ta}"
         assert "seg_05_mail_fb.wav" in tb, "後半はフォールバック版おたよりを指すはず"
-        assert ta.count("jingle1.wav") == 2, "ジングルは曲明けの2回。両方とも前半"
+        # ★ジングルは曲明けの2回。**両方とも前半**（ファイル名で数えない。実名は変わる）
+        assert len([l for l in ta.splitlines() if l.startswith(JINGLE_DIR)]) == 2, ta
+        assert not any(l.startswith(JINGLE_DIR) for l in tb.splitlines()), tb
         assert ta.index("A.mp3") < ta.index("B.mp3"), "曲の順番が入れ替わっている"
         # ★前半＋後半で7ブロック全部が1回ずつ出ること（割った拍子に落とさない）
         both = ta + tb
@@ -322,16 +338,33 @@ def _test(log) -> None:
                 assert js[0] != js[1], f"同じ回で同じジングルが2回: {js}"
                 # ★歌手ぶんは**曲と同じフォルダ**を指すこと（こちらは配らないので）
                 for ln in js:
-                    assert ln.startswith(SONG_DIR), f"曲フォルダを指していない: {ln}"
+                    assert ln.startswith(JINGLE_DIR), f"ジングルフォルダを指していない: {ln}"
                 got[dd.isoformat()] = tuple(js)
             assert len(set(got.values())) == 3, f"日替わりになっていない: {got}"
-        finally:
+            # ★保険: JINGLESが空なら、こちらが配る1本（日付フォルダ側）に落ちる
             g["JINGLES"] = [FALLBACK_JINGLE]
-        # ★名前をもらうまでの既定: 1本だけ＝従来どおり、**日付フォルダのほう**を指す
-        t = build(day, tmp, pack, log, hours=[6], halves=["a"])[0].read_text(encoding="utf-8")
-        assert t.count("jingle1.wav") == 2, "1本のときは従来どおりのはず"
-        assert all(ln.startswith(VOICE_ROOT) for ln in t.splitlines()
-                   if ln.endswith("jingle1.wav")), "既定の1本は日付フォルダのはず"
+            t = build(day, tmp, pack, log, hours=[6], halves=["a"])[0] \
+                .read_text(encoding="utf-8")
+            assert t.count("jingle1.wav") == 2, "保険の1本に落ちていない"
+            assert all(ln.startswith(VOICE_ROOT) for ln in t.splitlines()
+                       if ln.endswith("jingle1.wav")), "保険の1本は日付フォルダのはず"
+        finally:
+            g["JINGLES"] = REAL_JINGLES
+
+        # ★★本番の設定そのもので確認する（テスト用の偽名で通しても意味がない）
+        #   ⚠ 02と07は**こずえの旧声**なので絶対に出てはいけない（プロハンさん指示）
+        assert "JINGLE_02.mp3" not in JINGLES and "JINGLE_07.mp3" not in JINGLES
+        assert len(JINGLES) == 10, JINGLES
+        seen = set()
+        for k in range(14):     # 2週間ぶん回して、10本すべてが出るか
+            dd = datetime.date(2026, 9, 6) + datetime.timedelta(days=k)
+            t = build(dd, tmp, pack, log, hours=[6], halves=["a"])[0] \
+                .read_text(encoding="utf-8")
+            js = [ln.rsplit(SEP, 1)[-1] for ln in t.splitlines()
+                  if ln.startswith(JINGLE_DIR)]
+            assert len(js) == 2 and js[0] != js[1], f"{dd}: {js}"
+            seen.update(js)
+        assert seen == set(JINGLES), f"出ないジングルがある: {set(JINGLES) - seen}"
     finally:
         shutil.rmtree(tmp.parent, ignore_errors=True)
     print("★playlist: 全部通った")
