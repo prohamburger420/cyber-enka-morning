@@ -18,6 +18,16 @@ on:
   #     workflow_dispatch を叩く（cronの遅延を受けない）。**未決。**
   #
   #   ⚠ 5時10分を選んだのは、毎時0分の混雑を外すため。0分ちょうどにしない。
+  #
+  # ⚠★★★2026-09-06 実測: **cronが1時間52分遅れた。**
+  #   予定 20:10Z（5:10 JST）→ 実際の発火 22:02Z（**7:02 JST**）、完了 7:14 JST。
+  #   ＝本番だったら**6時の回も7時の回も番組が無い**。しかもジョブは緑で、
+  #     遅刻はどこにも報告されない。**「多少遅れても間に合う」の見積もりが甘かった。**
+  #   ★対処（nordw選択 2026-09-06）: **パスAもVPSから叩く**（4:30）。
+  #     VPSは常時起動なのでcronの遅延を受けない。
+  #     cronは**保険として残す**（VPSが落ちた日は、遅れてでも届いたほうがよい）。
+  #   ⚠ 保険を残すと**同じ日に2回パスAが走りうる**ので、上の check ジョブで
+  #     「もうできていれば何もしない」を必ず通す（放送中の.wav上書きを防ぐ）。
   schedule:
     - cron: "10 20 * * *"
   workflow_dispatch:
@@ -40,9 +50,54 @@ on:
         description: "パスB専用。何時の回か（6/7/8）。その回のM3Uだけ書き直す"
         required: false
         default: "6"
+      force:
+        description: "既にその日の番組ができていても作り直す"
+        type: boolean
+        default: false
 
 jobs:
+  # ★★その日の番組が既にできていれば、**何もしない**（2026-09-06）。
+  #   VPSが4:30に叩き、cronは保険として残す構成にしたので、
+  #   **同じ日に2回パスAが走りうる**。作り直すと、7時・8時の放送で
+  #   RadioDJが掴んでいる .wav を rclone が上書きしに行く＝放送中の事故になる。
+  #   ★「M3Uがある」＝「7ブロック揃って納品が完了した」の意味になっている
+  #     （欠けたらM3Uを書かない設計）。完了マーカーとしてそのまま使える。
+  #   ⚠ 手で作り直したいときは force を立てる。
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      done: ${{ steps.look.outputs.done }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - id: look
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          pip install -q boto3
+          # パスBは常に走る（おたよりは放送中に差し替えるのが仕事）
+          if [ "${{ inputs.pass || 'a' }}" != "a" ] || [ "${{ inputs.force }}" = "true" ]; then
+            echo "done=false" >> $GITHUB_OUTPUT; exit 0
+          fi
+          python infra/r2.py pull out/playlists pl || true
+          D=$(TZ=Asia/Tokyo date +%F)
+          if [ -f "pl/$D.06.m3u" ]; then
+            echo "★$D の番組は既にできている → 作り直さない（作り直すと放送中のファイルを上書きする）"
+            echo "done=true" >> $GITHUB_OUTPUT
+          else
+            echo "$D の番組はまだ無い → 作る"
+            echo "done=false" >> $GITHUB_OUTPUT
+          fi
+
   build:
+    needs: check
+    if: needs.check.outputs.done != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
