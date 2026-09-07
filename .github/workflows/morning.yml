@@ -54,6 +54,14 @@ on:
         description: "既にその日の番組ができていても作り直す"
         type: boolean
         default: false
+      # ★前夜の先行生成用（2026-09-07）。VPSの朝タスク（4:30トリガー）が未設置の間、
+      #   cronは実測で毎朝ほぼ2時間遅れる（9/6: 1h52m、9/7: 1h56m）＝6時に間に合わない。
+      #   前夜にこれで翌日分を作っておけば、朝は「もうある」でcronがスキップするだけ。
+      #   天気は collect_weather(log, day) が**その日付の予報**を取るので前夜でも正しい。
+      date:
+        description: "生成対象日 YYYY-MM-DD（空=今日。前夜に翌日分を作るときだけ指定）"
+        required: false
+        default: ""
 
 jobs:
   # ★★その日の番組が既にできていれば、**何もしない**（2026-09-06）。
@@ -86,7 +94,7 @@ jobs:
             echo "done=false" >> $GITHUB_OUTPUT; exit 0
           fi
           python infra/r2.py pull out/playlists pl || true
-          D=$(TZ=Asia/Tokyo date +%F)
+          D="${{ inputs.date }}"; D=${D:-$(TZ=Asia/Tokyo date +%F)}
           if [ -f "pl/$D.06.m3u" ]; then
             echo "★$D の番組は既にできている → 作り直さない（作り直すと放送中のファイルを上書きする）"
             echo "done=true" >> $GITHUB_OUTPUT
@@ -108,6 +116,8 @@ jobs:
       PASS: ${{ inputs.pass || 'a' }}
       WARM_WAIT: ${{ inputs.warm_wait || '0' }}
       HOUR: ${{ inputs.hour || '6' }}
+      # ★空なら各ステップで「今日(JST)」に倒す。cron起動では常に空
+      DATE: ${{ inputs.date }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
@@ -230,7 +240,7 @@ jobs:
       - name: パスAの成果物を取ってくる（パスBのみ）
         if: env.PASS == 'b'
         run: |
-          D=out/$(TZ=Asia/Tokyo date +%F)
+          D=out/${DATE:-$(TZ=Asia/Tokyo date +%F)}
           python infra/r2.py pull "$D" "$D"
           ls -la "$D"
 
@@ -254,7 +264,7 @@ jobs:
         if: env.PASS == 'b' && env.WARM_WAIT != '0'
         continue-on-error: true
         run: |
-          D=out/$(TZ=Asia/Tokyo date +%F)
+          D=out/${DATE:-$(TZ=Asia/Tokyo date +%F)}
           mkdir -p "$D"
           # ★★収集の窓は**壁時計で決める**（2026-09-06）。放送のHH時に対して
           #   HH:01:00 〜 HH:04:00。準備にかかった時間から逆算しない。
@@ -274,7 +284,7 @@ jobs:
 
       - name: 台本と音声を作る
         run: |
-          python -m runner.build --pass "$PASS" --hour "$HOUR" ${{ inputs.no_audio && '--no-audio' || '' }}
+          python -m runner.build --pass "$PASS" --hour "$HOUR" ${DATE:+--date "$DATE"} ${{ inputs.no_audio && '--no-audio' || '' }}
 
       # ★台帳の書き戻しは納品より先。ここが落ちても納品は済ませたい…わけではなく、
       #   逆に「読んだのに記録が残らない」と翌朝また同じ話題を読む。だから先に確実に戻す。
@@ -297,7 +307,9 @@ jobs:
       #     ＝`no_audio` は「台本の下見」であって、納品ではない。
       - name: この日のフォルダを空にする（パスAのみ）
         if: env.PASS == 'a' && !inputs.no_audio
-        run: python infra/r2.py clear "out/$(TZ=Asia/Tokyo date +%F)"
+        # ★DATE指定時は**その日**のフォルダを空にする。前夜の先行生成が
+        #   「今日=放送済みの日」のフォルダを消したら、9/6の事故の再演になる
+        run: python infra/r2.py clear "out/${DATE:-$(TZ=Asia/Tokyo date +%F)}"
 
       # ⚠★`no_audio` は下見なので**納品しない**。音声の無い成果物をR2へ流すと、
       #   VPSがそれを降ろして、その日の音声を欠けた状態にする。

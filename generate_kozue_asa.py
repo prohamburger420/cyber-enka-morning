@@ -90,16 +90,23 @@ WEEKDAYS = "月火水木金土日"
 
 
 # ---------------------------------------------------------------- data
-def collect_weather(log: logging.Logger) -> dict:
-    """Open-Meteo（キー不要・無料）から全国10地方の今日の予報を一括取得する。"""
+def collect_weather(log: logging.Logger, day=None) -> dict:
+    """Open-Meteo（キー不要・無料）から全国10地方の今日の予報を一括取得する。
+
+    ★day（datetime.date）を渡すと**その日の予報**を取る（2026-09-07）。
+      渡さないと従来どおり「取得した日」の予報（forecast_days=1 は daily[0]＝当日）。
+      ⚠ 前夜に翌日分を先行生成するとき、これが無いと**前日の天気を翌日の放送で読む**。
+    """
     lats = ",".join(str(r[2]) for r in REGIONS)
     lons = ",".join(str(r[3]) for r in REGIONS)
+    span = (f"&start_date={day.isoformat()}&end_date={day.isoformat()}"
+            if day else "&forecast_days=1")
     url = (
         "https://api.open-meteo.com/v1/forecast"
         f"?latitude={lats}&longitude={lons}"
         "&daily=weather_code,temperature_2m_max,temperature_2m_min,"
         "precipitation_probability_max"
-        "&timezone=Asia%2FTokyo&forecast_days=1"
+        f"&timezone=Asia%2FTokyo{span}"
     )
     log.info("weather GET (全国%d地点) %s", len(REGIONS), url)
     with urllib.request.urlopen(url, timeout=15) as r:

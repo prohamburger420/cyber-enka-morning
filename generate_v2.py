@@ -510,7 +510,9 @@ def build_pack(day: datetime.date, log, traffic_live: bool) -> dict:
         "date": day.isoformat(),
         "date_ja": f"{day.year}年{day.month}月{day.day}日",
         "weekday_ja": v1.WEEKDAYS[day.weekday()] + "曜日",
-        "weather": v1.collect_weather(log),
+        # ★dayを渡す＝**その日の予報**（2026-09-07）。前夜に翌日分を先行生成しても
+        #   前日の天気を読まない
+        "weather": v1.collect_weather(log, day),
         "traffic": v1.collect_traffic(log, live=traffic_live),
         "theme_of_today": pick_theme(day),
         "uranai_angle": pick_uranai_angle(day),
