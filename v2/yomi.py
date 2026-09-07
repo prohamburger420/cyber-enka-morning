@@ -135,10 +135,27 @@ def _song_rules() -> list[tuple[str, str]]:
 _SONG_CACHE: list | None = None
 
 
+def _config_rules() -> list[tuple[str, str]]:
+    """選曲プール(config)にプロハンさんが書いた読み（2026-09-07）。
+
+    ★キャッシュしない。senkyoku.load() が走った**あと**に埋まる値なので、
+      呼ばれるたびに見に行く（同プロセスで build_pack → 合成 の順が前提）。
+    """
+    try:
+        try:
+            from v2 import senkyoku
+        except ImportError:
+            import senkyoku
+        return [(re.escape(a), b) for a, b in senkyoku.LAST_YOMI]
+    except Exception:
+        return []
+
+
 def fix(text: str) -> str:
     """TTSに渡す直前に呼ぶ。台本そのものは書き換えない。"""
     # ★曲名・歌手名を先に処理する。長い固有名詞を、一般規則が食う前に確定させる
-    for pat, rep in _song_rules():
+    #   configの読み（新曲）→ 確定済みの読み → 一般規則、の順
+    for pat, rep in _config_rules() + _song_rules():
         text = re.sub(pat, rep, text)
     for pat, rep in RULES:
         text = re.sub(pat, rep, text)

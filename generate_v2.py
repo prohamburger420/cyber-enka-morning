@@ -68,6 +68,18 @@ def pick_songs(day: datetime.date) -> list[str]:
       曲名しか持たないと、こずえが**違う歌手名を言う**。曲そのものを持ち回る。
     """
     p1, p2 = song_pools()
+    # ★★選曲プール（2026-09-07 プロハンさん要望）。config/ があればそちらが勝つ。
+    #   無ければ従来どおり（＝明朝の放送はこの1行の下をそのまま通る）。
+    #   MORNING_NG だけは従来経路にも効かせる（「絶対に選ばれない」の約束を守る）。
+    from v2 import senkyoku
+    cfg = senkyoku.load(BASE, p2, log=lambda m: print(m, file=sys.stderr))
+    picked = senkyoku.pick(day, cfg, p1, p2,
+                           _excluded1(), log=lambda m: print(m, file=sys.stderr))
+    if picked:
+        return picked
+    if cfg["ng"]:
+        p1 = [s for s in p1 if s["file"] not in cfg["ng"]] or p1
+        p2 = [s for s in p2 if s["file"] not in cfg["ng"]] or p2
     t = day.toordinal()
     a = p1[(t * 7919) % len(p1)]
     b = p2[(t * 4001) % len(p2)]
@@ -77,6 +89,30 @@ def pick_songs(day: datetime.date) -> list[str]:
 
 
 _POOLS: tuple[list[dict], list[dict]] | None = None
+_EXCL1: set | None = None
+
+
+def _find_data(name: str) -> Path:
+    """★ローカルは data/、本番(Actions)は R2から取った assets/ に置かれる。両方見る。
+    片方しか見ないと、本番で v1の手書きリストに黙って倒れて
+    「歌手名が空・0秒」の曲が選ばれる（2026-09-05 実測）。"""
+    for d in ("data", "assets"):
+        p = BASE / d / name
+        if p.exists():
+            return p
+    raise FileNotFoundError(name)
+
+
+def _excluded1() -> set:
+    """1曲目に使わない曲（プロハンさんが×を付けた91曲の逆＝×リスト）。"""
+    global _EXCL1
+    if _EXCL1 is None:
+        try:
+            _EXCL1 = {(e["artist"], e["title"]) for e in json.loads(
+                _find_data("song1_excluded.json").read_text(encoding="utf-8"))}
+        except Exception:
+            _EXCL1 = set()
+    return _EXCL1
 
 
 def song_pools() -> tuple[list[dict], list[dict]]:
@@ -84,18 +120,8 @@ def song_pools() -> tuple[list[dict], list[dict]]:
     global _POOLS
     if _POOLS is None:
         try:
-            # ★ローカルは data/、本番(Actions)は R2から取った assets/ に置かれる。
-            #   両方見る。片方しか見ないと、本番で v1の手書きリストに黙って倒れて
-            #   「歌手名が空・0秒」の曲が選ばれる（2026-09-05 実測）。
-            def _find(name: str) -> Path:
-                for d in ("data", "assets"):
-                    p = BASE / d / name
-                    if p.exists():
-                        return p
-                raise FileNotFoundError(name)
-            songs = json.loads(_find("songs.json").read_text(encoding="utf-8"))
-            ng = {(e["artist"], e["title"]) for e in json.loads(
-                _find("song1_excluded.json").read_text(encoding="utf-8"))}
+            songs = json.loads(_find_data("songs.json").read_text(encoding="utf-8"))
+            ng = _excluded1()
             first = [s for s in songs
                      if s["sec"] >= 280 and (s["artist"], s["title"]) not in ng]
             _POOLS = (first or songs, songs)

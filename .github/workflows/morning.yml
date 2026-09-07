@@ -217,6 +217,12 @@ jobs:
       - name: 番組の資産を取ってくる（差分だけ流れる）
         run: python infra/r2.py pull assets assets
 
+      # ★選曲プール（2026-09-07）。プロハンさんがVPSの config\ で編集したものを
+      #   同期が吸い上げた先。**無くても動く**（従来選曲に倒れる）ので落とさない。
+      - name: 選曲プールを取ってくる
+        continue-on-error: true
+        run: python infra/r2.py pull config config
+
       # ★★これを忘れると番組名と名前のアクセントが元に戻る。
       #   「サイバー演歌モーニング」「らいおんこずえ」の抑揚は
       #   GPT-SoVITSのユーザー辞書で作っている（2026-09-04 耳判定で確定）。
