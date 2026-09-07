@@ -73,7 +73,17 @@ from pathlib import Path, PureWindowsPath
 #   曲リスト(cyberenkaplaylist0904.csv)の Path 列が C:\CYBER_ENKA_STREAM\tracks_norm\ だった。
 SONG_DIR = r"C:\CYBER_ENKA_STREAM\tracks_norm"
 # こずえの音声とジングルの置き場所（rcloneが降ろす先。VPS_SETUP.md と合わせる）
-VOICE_ROOT = r"C:\kozue_asa"
+# ★2026-09-07 プロハンさん指定で C:\kozue_asa → 配信素材と同じツリーの下へ変更。
+#   RadioDJのイベント6つは**すでにこのパスで設定済み**（LINE 2026-09-06 17:12）。
+#   ⚠ ここを変えたら kozue_sync.bat の DEST と kozue_bangumi.ps1 の $Dest も同じ値にすること。
+VOICE_ROOT = r"C:\CYBER_ENKA_STREAM\kozue_asa"
+
+# ★カバーアート用のアーティスト名（2026-09-07 プロハンさん相談から）。
+#   配信のオーバーレイが「前に流れた曲のアー写を出し続ける」ので、こずえの音声は
+#   mp3にアー写を埋め込み、さらにファイル名を「◯◯_雷音こずえ.mp3」にする
+#   （局側の名前検知でも拾えるように両対応）。build.py がこの名前で書き、
+#   下の _seg_path が同じ名前で拾う。**片方だけ変えると納品が全滅する。**
+ARTIST = "雷音こずえ"
 
 BROADCAST_HOURS = (6, 7, 8)     # 2026-09-05 確定。めざましテレビ方式で同じ回を3回
 
@@ -145,15 +155,18 @@ def half_of(block: str) -> str | None:
 
 
 def _seg_path(outdir: Path, name: str) -> str | None:
-    """seg_XX_<name>.(wav|mp3) を名前で探す。
+    """seg_XX_<name>(_雷音こずえ)?.(wav|mp3) を名前で探す。
 
     ★番号で決め打ちしない。番号はコーナーが増えるたびにずれる。
       make_through.py で同じ理由の事故を2回やっている（SAを足した時とニュースを足した時）。
-    ⚠★拡張子でも決め打ちしない。**本番(runner/build.py)は .wav、ローカル(generate_v2.py)は
-      .mp3** を作る。最初 .wav 決め打ちで書いて、ローカル検証が全滅した（2026-09-05）。
+    ⚠★拡張子でも決め打ちしない。**本番(runner/build.py)は _雷音こずえ.mp3、
+      ローカル(generate_v2.py)は素の .mp3** を作る。最初 .wav 決め打ちで書いて、
+      ローカル検証が全滅した（2026-09-05）。
+    ★本番名（アー写つき）を最優先で拾う。同じフォルダに変換前のwavが残っていても
+      本番名が勝つ。
     """
-    for ext in ("wav", "mp3"):
-        hits = sorted(outdir.glob(f"seg_*_{name}.{ext}"))
+    for pat in (f"seg_*_{name}_{ARTIST}.mp3", f"seg_*_{name}.wav", f"seg_*_{name}.mp3"):
+        hits = sorted(outdir.glob(pat))
         if hits:
             return str(hits[0])
     return None
@@ -166,7 +179,7 @@ def build(day: datetime.date, outdir: Path, pack: dict, log,
 
     ★VPS上のパスで書く。ここ(Actions)のパスではない。
       ローカルの outdir は `out/2026-09-05/` だが、VPSでは
-      `C:\\kozue_asa\\2026-09-05\\` に降りてくる。
+      `C:\\CYBER_ENKA_STREAM\\kozue_asa\\2026-09-05\\` に降りてくる。
 
     halves: 書く側を選ぶ。パスAは両方、**パスBは後半だけ**（前半は既に放送済み・
             書き換えても読み直されないので触らない）。
@@ -176,7 +189,7 @@ def build(day: datetime.date, outdir: Path, pack: dict, log,
 
         ★★`Path` を使ってはいけない（2026-09-05 実際に納品物が壊れた）。
           本番のランナーは **Linux** なので `Path` は POSIX 版になり、区切りが `/` になる。
-          結果、納品されたM3Uが `C:\kozue_asa/2026-09-05/seg_01_talk1.wav` という
+          結果、納品されたM3Uが `C:\kozue_asa/2026-09-05/seg_01_talk1.wav`（当時のパス）という
           **区切りの混ざったパス**になっていた。Windowsは大抵通すが、RadioDJは
           フォーラムに「ファイル名にうるさい(finicky)」という報告がある。賭けない。
           → `PureWindowsPath` なら**どのOSで動かしても `\` で書く**。
@@ -302,6 +315,18 @@ def _test(log) -> None:
         assert "seg_01_mail.wav" in t7 and "mail_fb" not in t7, "おたよりが差し替わっていない"
         # ★前半は触っていないこと（放送開始時に読まれてしまっているので書き換え禁止）
         assert sorted(A)[0].read_text(encoding="utf-8") == ta, "パスBが前半を書き換えた"
+
+        # ★本番名（アー写つき `_雷音こずえ.mp3`）が最優先で拾われること（2026-09-07）。
+        #   変換前のwavが同居していても本番名が勝つ
+        (tmp / f"seg_01_talk1_{ARTIST}.mp3").write_bytes(b"x")
+        t6 = build(day, tmp, pack, log, hours=[6], halves=["a"])[0] \
+            .read_text(encoding="utf-8")
+        assert f"seg_01_talk1_{ARTIST}.mp3" in t6, t6
+        (tmp / f"seg_01_talk1_{ARTIST}.mp3").unlink()
+        # ★mail の検索が mail_fb の本番名を誤って拾わないこと（globの誤マッチ番人）
+        (tmp / f"seg_05_mail_fb_{ARTIST}.mp3").write_bytes(b"x")
+        assert "fb" not in Path(_seg_path(tmp, "mail")).name, _seg_path(tmp, "mail")
+        (tmp / f"seg_05_mail_fb_{ARTIST}.mp3").unlink()
 
         # 欠けたら書かない（＝配らない＝曲が流れ続ける）
         # ★★2026-09-06: **後半が欠けても前半は書く**。片方だけ諦める

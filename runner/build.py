@@ -38,6 +38,47 @@ from runner import script_api, tts       # noqa: E402
 ASSETS = ROOT / "assets"
 OUT = ROOT / "out"
 
+# ★カバーアート（2026-09-07 プロハンさん相談から）。
+#   配信のオーバーレイは「いま流れているファイル」のアー写を出す仕組みで、こずえの
+#   素のwavには何も入っていないため**前に流れた曲の歌手のアー写が出続けていた**。
+#   → こずえの音声はmp3にして、①ID3にアー写＋アーティスト名を埋め込み、
+#     ②ファイル名も「◯◯_雷音こずえ.mp3」にする（局側の名前検知にも乗せる。両対応）。
+#   画像はプロハンさん支給のロゴ入りアー写（LINE 2026-09-07 08:24）。assetsはR2から来る。
+COVER = ASSETS / "kozue_cover.jpg"
+ALBUM = "雷音こずえのサイバー演歌モーニング"
+# オーバーレイに出る想定の表示名。コーナーごとに変える
+CORNER_TITLES = {
+    "talk1": "オープニング", "traffic": "交通情報", "sa": "サービスエリア情報",
+    "news": "ニュース", "mail": "おたより", "mail_fb": "おたより",
+    "uranai": "今日の占い", "ending": "エンディング",
+}
+
+
+def _to_mp3(wav, mp3, corner: str, log) -> None:
+    """BGM入りwavを、アー写・タグ入りのmp3にする。
+
+    ★アー写が無い日もタグだけ埋めて続行する（番組を止めるほどの欠陥ではない。
+      アーティスト名タグだけでも局側の表示が直る可能性がある）。
+    """
+    import subprocess
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav)]
+    if COVER.exists():
+        cmd += ["-i", str(COVER), "-map", "0:a", "-map", "1:0",
+                "-c:v", "copy", "-disposition:v", "attached_pic",
+                "-metadata:s:v", "title=Album cover",
+                "-metadata:s:v", "comment=Cover (front)"]
+    else:
+        log.warning("★カバーアートが無い: %s（タグだけ埋めて続行）", COVER)
+        cmd += ["-map", "0:a"]
+    cmd += ["-c:a", "libmp3lame", "-q:a", "2", "-id3v2_version", "3",
+            "-metadata", f"artist={playlist.ARTIST}",
+            "-metadata", f"album={ALBUM}",
+            "-metadata", f"title={CORNER_TITLES.get(corner, corner)}",
+            str(mp3)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"mp3変換に失敗: {r.stderr[-400:]}")
+
 
 def character() -> str:
     """★キャラクター設定は assets（R2から取得）から読む。コードには置かない。"""
@@ -112,7 +153,20 @@ def synth_segments(segs, outdir: Path, log) -> tuple[list[Path], list[str]]:
                       traceback.format_exc())
             failed.append(name)
             continue
-        made.append(wav)
+
+        # ★★mp3化＋アー写埋め込み（2026-09-07）。ファイル名は playlist._seg_path と
+        #   対になっている（`_雷音こずえ.mp3`）。**片方だけ変えると納品が全滅する。**
+        #   ⚠ 失敗したら欠けたブロック扱い（wavのまま黙って配ると、局のオーバーレイに
+        #     前の曲の歌手のアー写が出る＝気づかれるまで直せない）。
+        mp3 = outdir / f"seg_{idx:02d}_{name}_{playlist.ARTIST}.mp3"
+        try:
+            _to_mp3(wav, mp3, name, log)
+            wav.unlink()
+        except Exception as e:
+            log.error("mp3化に失敗 %s: %s", name, e)
+            failed.append(name)
+            continue
+        made.append(mp3)
     return made, failed
 
 
