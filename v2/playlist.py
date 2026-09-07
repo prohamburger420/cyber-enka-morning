@@ -257,7 +257,11 @@ def build(day: datetime.date, outdir: Path, pack: dict, log,
         for h in hours:
             # マスク `yyyy-MM-dd.HH` に合わせる
             p = pl_dir / f"{day.isoformat()}.{h:02d}.m3u"
-            p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            # ★BOM付きUTF-8で書く（2026-09-07）。M3Uの行は日本語だらけ
+            #   （曲名も、こずえの音声も `_雷音こずえ.mp3`）。RadioDJは.NET製で、
+            #   BOMがあれば読み側のエンコーディング自動判定が確実に効く。
+            #   BOM自体は1行目の `#EXTM3U`（コメント行）に付くので、外れても実害がない。
+            p.write_text("\n".join(lines) + "\n", encoding="utf-8-sig")
             made.append(p)
             log.info("M3U %s/%s (%d行)", PL_DIR[half], p.name, len(lines) - 1)
     return made
