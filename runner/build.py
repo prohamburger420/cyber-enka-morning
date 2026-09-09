@@ -286,6 +286,23 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool,
             log.error("★M3Uが1本も書けなかった → この回は納品しない")
             return 1
 
+        # ★★アーカイブ（2026-09-09 nordw依頼）。トーク通しを1本のmp3にまとめる。
+        #   ⚠ **回ごとに作る**のが肝。おたよりは回ごとに違うのに、パスBは
+        #     `seg_01_mail_*.mp3` を同じ名前で上書きするので、あとから作ると
+        #     **最後の回（8時）のおたよりしか残らない**。だからパスBの直後に作る。
+        #   ★曲とジングルは入らない（この機械に無い＝VPS上にしかある）。
+        #     曲込みの完全版は infra/vps/kozue_archive.ps1 がVPS側で作る。
+        #   ★落ちても番組は止めない。アーカイブは放送の後工程。
+        # ⚠ 置き場所は **out/ の外**（ROOT/archive）。out/ はVPSが丸ごと降ろすので、
+        #   中に置くと放送機に毎日20MB積もり、しかも prune --days 7 で消える。
+        from v2 import archive
+        try:
+            archive.from_segments(
+                day, outdir, ROOT / "archive", log.info,
+                hour=hour if pass_name == "b" else None, cover=COVER)
+        except Exception as e:
+            log.error("★アーカイブに失敗（番組は続行）: %s", e)
+
     log.info("=== パス%s 完了 %.1f秒 ===", pass_name.upper(), time.time() - t0)
     return 0
 

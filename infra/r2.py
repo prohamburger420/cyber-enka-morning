@@ -165,6 +165,34 @@ def clear(prefix: str) -> int:
     return 0
 
 
+def links(prefix: str, days: int) -> int:
+    """prefix以下のダウンロードURLを出す（2026-09-09 アーカイブ配布用）。
+
+    ★R2は既定で非公開なので、**期限つきの署名URL**を作る。バケットを
+      公開に切り替えない（公開にすると番組の全部が誰でも読める状態になる）。
+    """
+    s3, bucket = client()
+    exp = days * 86400
+    rows = []
+    tok = None
+    while True:
+        kw = {"Bucket": bucket, "Prefix": prefix + "/"}
+        if tok:
+            kw["ContinuationToken"] = tok
+        r = s3.list_objects_v2(**kw)
+        for o in r.get("Contents", []):
+            rows.append((o["Key"], o["Size"]))
+        if not r.get("IsTruncated"):
+            break
+        tok = r.get("NextContinuationToken")
+    for key, size in sorted(rows):
+        url = s3.generate_presigned_url(
+            "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=exp)
+        print(f"\n{key.rsplit('/', 1)[-1]}  ({size/1048576:.1f}MB)\n{url}")
+    print(f"\n{len(rows)}件（リンクの有効期限は{days}日）")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="R2との受け渡し")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -172,6 +200,8 @@ def main() -> int:
     p2 = sub.add_parser("pull"); p2.add_argument("prefix"); p2.add_argument("local", type=Path)
     p4 = sub.add_parser("clear"); p4.add_argument("prefix")
     p3 = sub.add_parser("prune"); p3.add_argument("prefix"); p3.add_argument("--days", type=int, default=7)
+    p5 = sub.add_parser("links"); p5.add_argument("prefix")
+    p5.add_argument("--days", type=int, default=7, help="リンクの有効期限（最長7日）")
     a = ap.parse_args()
     if a.cmd == "push":
         return push(a.local, a.prefix)
@@ -179,6 +209,8 @@ def main() -> int:
         return pull(a.prefix, a.local)
     if a.cmd == "clear":
         return clear(a.prefix)
+    if a.cmd == "links":
+        return links(a.prefix, a.days)
     return prune(a.prefix, a.days)
 
 

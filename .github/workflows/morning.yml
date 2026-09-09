@@ -326,6 +326,15 @@ jobs:
           python infra/r2.py push out out
           python infra/r2.py prune out --days 7
 
+      # ★アーカイブ（2026-09-09）。**out/ とは別のprefix**に置く。
+      #   out/ はVPSが丸ごと降ろすので、そこに置くと放送機に毎日20MB積もる。
+      #   ⚠ pruneしない（アーカイブは消えたら意味がない）。
+      - name: アーカイブをR2へ
+        if: ${{ !inputs.no_audio }}
+        continue-on-error: true
+        run: |
+          if [ -d archive ]; then python infra/r2.py push archive archive; fi
+
       - name: 結果を持ち帰る
         if: always()
         uses: actions/upload-artifact@v4
