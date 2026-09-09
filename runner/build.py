@@ -196,10 +196,10 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool,
             log.warning("チャット除外[%s]: %s", d["_why"], d["text"][:40])
         log.info("チャット %d件中 %d件を採用", len(chat["messages"]), len(kept))
         mails = "\n".join(f"- {m['author']}さん: {m['text']}" for m in kept)
+        # ★song2は渡さない（2026-09-09）。曲2はおたよりより前に流れるので紹介しない。
         prompt = v2.PROMPT_B.format(
             character=character(), rules=v2.COMMON_RULES,
-            theme=pack["theme_of_today"], mails=mails,
-            song2=f'{pack["song2"]["title"]}（歌: {pack["song2"]["artist"]}）')
+            theme=pack["theme_of_today"], mails=mails)
 
     (outdir / f"prompt_{pass_name}.txt").write_text(prompt, encoding="utf-8")
     try:
