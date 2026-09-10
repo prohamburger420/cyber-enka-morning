@@ -156,7 +156,10 @@ jobs:
           #   「いま配信中の動画ID」を **yt-dlpのCLI** で引く。入っていないので
           #   FileNotFoundError → 握りつぶし → 「配信中の動画が見つからない」。
           #   ＝**おたよりは本番で一度も取れていなかった。**
-          pip install -q boto3 anthropic pytchat yt-dlp 'numpy==1.26.4' 'transformers==4.50.0' 'soundfile==0.14.0'
+          # ★fugashi/unidic-lite は読みの二重チェック用（v2/yomi_diff.py）。
+          #   pyopenjtalk が「急がば」を**キューガバ**と読んで放送に乗った（9/7）ので、
+          #   別の辞書と突き合わせて食い違いを警告する。無くても番組は動く。
+          pip install -q boto3 anthropic pytchat yt-dlp fugashi unidic-lite 'numpy==1.26.4' 'transformers==4.50.0' 'soundfile==0.14.0'
           # ★ffmpegと同じ轍を踏まないよう、**入ったことをここで確かめる**。
           #   （`|` を使わない。パイプの終了コードは右側のものになる）
           command -v yt-dlp

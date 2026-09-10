@@ -243,6 +243,28 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool,
     from v2 import yomi_check
     yomi_check.write(segs, outdir.resolve(), log)
 
+    # ★★読みの二重チェック（2026-09-10）。pyopenjtalk と UniDic で読ませて、
+    #   **食い違ったところだけ**知らせる。きっかけは「急がば回れ」が
+    #   **キューガバマワレ**と読まれて 9/7 の放送に乗っていたこと。
+    #   固有名詞なら置換表・辞書に載せる話だが、これは**一般語の読み間違い**で、
+    #   事前に気づく手立てが無かった。
+    #   ⚠ **自動で直さない**（yomi_check と同じ規律）。カタカナで上書きすると
+    #     アクセント句が壊れる（歌手名の句割れの主犯がこれだった）。
+    #     直すときは voice/userdict_entries.csv に**アクセント付きで**入れる。
+    #   ★実測: 素朴に比べると台本2本で113語も出たが（長音の表記違い等）、
+    #     同じ範囲どうしで比べて表記の流儀を正規化したら **0語** になった。
+    #     ＝出たら本物、として扱える。
+    try:
+        from v2 import yomi_diff
+        rows = yomi_diff.diffs("\n".join(b for _, b in segs))
+        for s, o, u in rows:
+            log.warning("★読みが怪しい: %s → pyopenjtalk=%s / UniDic=%s", s, o, u)
+        if rows:
+            print(f"::warning title=読みが怪しい語::{len(rows)}語 "
+                  f"({', '.join(s for s, _, _ in rows[:5])})")
+    except Exception as e:
+        log.warning("読みの二重チェックは動かなかった（番組は続行）: %s", e)
+
     if not no_audio:
         made, failed = synth_segments(segs, outdir, log)
         log.info("音声 %d本", len(made))
