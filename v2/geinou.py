@@ -153,6 +153,20 @@ def _world() -> dict:
     return json.loads(_find("world.json").read_text(encoding="utf-8"))
 
 
+def banned_names() -> list[str]:
+    """★出してはいけない名前（2026-09-10 build()から独立させた）。
+
+    ⚠ これまでこのリストは build() の戻り値の中にしか無かった。つまり
+      **build()が None を返した日（材料が作れなかった日）、禁止リストごとプロンプトから消えた。**
+      材料が無い日ほどモデルは自分で埋めようとするのに、その日だけ歯止めが外れる形だった。
+      → datapack の**トップレベル**に常に載せる（build_pack を見ること）。
+    """
+    try:
+        return sorted({x["name"] for x in _world()["_出してはいけない名前"]["名前"]})
+    except Exception:
+        return []
+
+
 def _songs_by_artist() -> dict:
     songs = json.loads(_find("songs.json").read_text(encoding="utf-8"))
     by = {}
