@@ -200,6 +200,13 @@ def collect_api(video_id: str, seconds: int, limit: int = 40,
     started_utc = datetime.now(timezone.utc)
     t0 = time.time()
     got: list[dict] = []
+    # ★★診断の穴を塞ぐ（2026-09-12）。これまで残していたのは**採用後の件数だけ**で、
+    #   「誰も書いていない」と「返ってきたが窓の外で捨てた」が区別できなかった。
+    #   実際 9/12 は2人が書いていたのに0件で、**生ログからは何も分からなかった**
+    #   （スピードタモリさん 06:08:55／nordw 07:04:04 ＝ 窓は HH:01:00〜HH:04:00）。
+    #   → APIが返した総数と、窓の外で捨てた分（一番惜しかった時刻つき）を必ず残す。
+    seen_raw = 0
+    dropped: list[dict] = []
     try:
         v = _api("videos", part="liveStreamingDetails", id=video_id)
         chat_id = (v["items"][0].get("liveStreamingDetails", {})
@@ -220,8 +227,12 @@ def collect_api(video_id: str, seconds: int, limit: int = 40,
             for it in r.get("items", []):
                 sn = it["snippet"]
                 ts = sn.get("publishedAt", "")
+                seen_raw += 1
                 # ★集め始めより前の発言は捨てる（初回レスポンスに履歴が混ざる）
                 if ts and ts < started_utc.isoformat().replace("+00:00", "Z"):
+                    dropped.append({"ts": ts,
+                                    "author": it["authorDetails"]["displayName"],
+                                    "why": "窓より前"})
                     continue
                 txt = (sn.get("textMessageDetails") or {}).get("messageText", "")
                 if not txt:
@@ -240,11 +251,21 @@ def collect_api(video_id: str, seconds: int, limit: int = 40,
         pass
     except Exception as e:
         print(f"★APIでのチャット取得に失敗: {type(e).__name__}: {e}", file=sys.stderr)
+    # ★窓の外で捨てたものを**必ず報告する**。0件の理由が「誰も書いていない」なのか
+    #   「書かれたが窓の外」なのかは、ここでしか分からない。
+    if dropped:
+        near = max(d["ts"] for d in dropped)
+        print(f"★窓の外で捨てた発言 {len(dropped)}件（一番新しいもの {near}）。"
+              f"窓は {started_utc.isoformat()} から {seconds}秒", file=sys.stderr)
+    if not got:
+        print(f"★採用0件（APIが返した総数 {seen_raw}件 / 窓の外で捨てた {len(dropped)}件）",
+              file=sys.stderr)
     if log_path:      # ★採否に関わらず生ログを残す（collect() と同じ）
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_path.write_text(json.dumps(
             {"video_id": video_id, "collected_at": started_utc.isoformat(),
-             "window_sec": seconds, "via": "api", "messages": got},
+             "window_sec": seconds, "via": "api", "messages": got,
+             "raw_count": seen_raw, "dropped": dropped},
             ensure_ascii=False, indent=1), encoding="utf-8")
     return got
 
