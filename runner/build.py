@@ -265,6 +265,24 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool,
     except Exception as e:
         log.warning("読みの二重チェックは動かなかった（番組は続行）: %s", e)
 
+    # ★★語尾の偏りを見る（2026-09-12）。nordw「〜ね。〜ね。としつこさを感じる」。
+    #   9/8 に「一文は15字前後」に変えたら、文数が増えたぶん語尾の数も増えて
+    #   既定の「〜ね。」が連発した（9/5 31%・最長2 → 9/12 **41%・最長5**）。
+    #   ⚠ **長さの規律を足すと、語尾の単調さが副作用で出る**。長さだけ見ていると
+    #     気づけず、耳で指摘されるまで4日かかった。だから機械に見張らせる。
+    #   ★直さない。語尾はキャラの声そのものなので、直すのはプロンプト側。
+    try:
+        from v2 import gobi
+        st, gw = gobi.check("\n".join(b for _, b in segs))
+        log.info("語尾: 文%d本 平均%.1f字 「〜ね」%d本(%.0f%%) 最長連続%d",
+                 st["n"], st["avg_len"], st["ne"], st["ne_ratio"] * 100, st["ne_run"])
+        for w in gw:
+            log.warning("★語尾が偏っている: %s", w)
+        if gw:
+            print(f"::warning title=語尾が偏っている::{' / '.join(gw)}")
+    except Exception as e:
+        log.warning("語尾チェックは動かなかった（番組は続行）: %s", e)
+
     if not no_audio:
         made, failed = synth_segments(segs, outdir, log)
         log.info("音声 %d本", len(made))
