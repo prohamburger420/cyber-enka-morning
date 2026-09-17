@@ -426,6 +426,14 @@ PROMPT_A = """あなたはネットラジオ局 CEBDR24 の放送作家であり
        ★datapack.weather.regions が**空の日は天気に触れない**（2026-09-10 追加）。
          「今朝は涼しいわね」のような**それらしい一言を作らない**。取れていない日は、
          天気の話を飛ばして次の要素へ進む。⚠ 外れた天気を毎朝の番組が言うと信用が落ちる。
+   (2.5) ★★★**datapack.oshirase があれば、ここで触れる**（2026-09-18 追加）。
+       無ければこの要素は飛ばす（いつもの日は何も起きない）。
+       - `oshirase.text` に書いてあることが**事実**。`oshirase.how` が扱い方。
+       - ⚠⚠ **書いてあること以外を足さない。** 日付・数字・肩書き・経緯・関係者を
+         **想像で補わない**。これは創作の電脳芸能ニュースと違って**実在の発表**で、
+         間違えると番組の信用がそのまま損なわれる。
+       - 長くしない。**2〜4文**で、こずえが素直に喜ぶ温度で。
+       - そのあと自然に(3)のおたよりテーマへ移る。
    (3) 今日のおたよりテーマの発表。
        ★★**ここで一度、短く募集する**（2026-09-14 追加）。詳しい案内は(5)でやるが、
          **聞いた人が書き始められる状態を、できるだけ早く作る**のが目的。
@@ -644,6 +652,34 @@ def _banned(log) -> list[str]:
     return b
 
 
+def _oshirase(log) -> dict | None:
+    """その日だけ触れる「実際のお知らせ」（2026-09-18 追加）。
+
+    ★創作の電脳芸能ニュースとは**別枠**。実在の発表を扱うので、
+      **ファイルに書いたことしか喋らせない**（日付や肩書きを台本側で創作させない）。
+    ★until を過ぎたら自動で止まる。**ニュースは古くなる**ので、
+      止め忘れて何日も同じ話を繰り返す事故を仕組みで防ぐ。
+    ★無ければ None ＝ 従来どおり何も起きない。
+    """
+    p = V2 / "oshirase.json"
+    if not p.exists():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        log.warning("お知らせファイルが読めない（無視して続行）: %s", e)
+        return None
+    if not d.get("text"):
+        return None
+    until = d.get("until", "")
+    today = datetime.date.today().isoformat()
+    if until and today > until:
+        log.info("お知らせは期限切れ（until=%s）→ 触れない", until)
+        return None
+    log.info("★今日のお知らせに触れる（until=%s）", until)
+    return {"text": d["text"], "how": d.get("how", "")}
+
+
 def build_pack(day: datetime.date, log, traffic_live: bool) -> dict:
     songs = pick_songs(day)
     return {
@@ -654,6 +690,8 @@ def build_pack(day: datetime.date, log, traffic_live: bool) -> dict:
         #   前日の天気を読まない
         "weather": v1.collect_weather(log, day),
         "traffic": v1.collect_traffic(log, live=traffic_live),
+        # ★その日だけの実際のお知らせ（無ければ None＝従来どおり）
+        "oshirase": _oshirase(log),
         "theme_of_today": pick_theme(day),
         "uranai_angle": pick_uranai_angle(day),
         "sa_of_today": v1.collect_sa(day, log),
