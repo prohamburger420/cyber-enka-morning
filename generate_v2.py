@@ -690,7 +690,7 @@ def _banned(log) -> list[str]:
     return b
 
 
-def _oshirase(log) -> dict | None:
+def _oshirase(log, day: datetime.date) -> dict | None:
     """その日だけ触れる「実際のお知らせ」（2026-09-18 追加）。
 
     ★創作の電脳芸能ニュースとは**別枠**。実在の発表を扱うので、
@@ -710,7 +710,9 @@ def _oshirase(log) -> dict | None:
     if not d.get("text"):
         return None
     until = d.get("until", "")
-    today = datetime.date.today().isoformat()
+    # ★放送日 day で比べる。GitHub Actions のランナーは UTC なので date.today() は
+    #   JSTの放送日より1日前になり、until を1日多く通してしまう（2026-09-18 再検証で発見）。
+    today = day.isoformat()
     if until and today > until:
         log.info("お知らせは期限切れ（until=%s）→ 触れない", until)
         return None
@@ -729,7 +731,7 @@ def build_pack(day: datetime.date, log, traffic_live: bool) -> dict:
         "weather": v1.collect_weather(log, day),
         "traffic": v1.collect_traffic(log, live=traffic_live),
         # ★その日だけの実際のお知らせ（無ければ None＝従来どおり）
-        "oshirase": _oshirase(log),
+        "oshirase": _oshirase(log, day),
         "theme_of_today": pick_theme(day),
         "uranai_angle": pick_uranai_angle(day),
         "sa_of_today": v1.collect_sa(day, log),
