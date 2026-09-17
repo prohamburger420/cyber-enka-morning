@@ -26,6 +26,16 @@ PATS = [
 NE_MAX_RATIO = 0.35     # 「〜ね」がこれを超えたら警告（9/5の実測31%が健全な例）
 NE_MAX_RUN = 3          # 同じ語尾がこれだけ続いたら警告
 
+# ★★★文の途中の間投助詞（2026-09-18 追加）。
+#   nordw「ねとさになったが、置き場所が的確でない。『なんとかでね、なんとかだった
+#   んだけどさ』みたいなバリエーションが要る」→ 測ったら**ほぼゼロ**だった:
+#     9/11 97文中1回 ／ 9/15 92文中1回 ／ 9/16・9/17・9/18 **0回**
+#   ＝「語尾を3文続けない」を**文末だけ**で満たしていて、話し言葉のリズムが無かった。
+#   ⚠ 文末だけ数えていたから気づけなかった。**測っていない軸は壊れていても分からない。**
+NAKA = re.compile(r"(でね|ててね|てね|けどね|からね|のにね|だけどさ|けどさ|でさ|てさ|"
+                  r"からさ|なってね|ちゃってさ)、")
+NAKA_MIN_PER_100 = 4    # 100文あたりこれを下回ったら警告（実測0〜1回＝出ていない状態）
+
 
 def sentences(text: str) -> list[str]:
     text = re.sub(r"===SEGMENT: \w+===", "", text)
@@ -51,10 +61,17 @@ def check(text: str) -> tuple[dict, list[str]]:
         run = run + 1 if f else 0
         best = max(best, run)
     ratio = kinds["〜ね"] / len(ss)
+    naka = len(NAKA.findall(text))
+    naka_per100 = 100 * naka / len(ss)
     stats = {"n": len(ss), "ne": kinds["〜ね"], "ne_ratio": ratio,
              "ne_run": best, "kinds": dict(kinds),
+             "naka": naka, "naka_per100": naka_per100,
              "avg_len": sum(len(s) for s in ss) / len(ss)}
     warns = []
+    if naka_per100 < NAKA_MIN_PER_100:
+        warns.append(f"文の途中の間投助詞（〜でね、〜だけどさ）が{naka}回しかない"
+                     f"（100文あたり{naka_per100:.1f}回。目安は{NAKA_MIN_PER_100}回以上）。"
+                     f"文末にだけ「ね」「さ」を置いていないか")
     if ratio > NE_MAX_RATIO:
         warns.append(f"「〜ね」で終わる文が{ratio:.0%}（{kinds['〜ね']}/{len(ss)}本）。"
                      f"目安は{NE_MAX_RATIO:.0%}まで")
@@ -69,9 +86,12 @@ def _test():
     st, w = check(bad)
     assert st["ne_run"] >= 3, st
     assert w, "連発を見逃した"
+    # ★nordwが挙げた自然な形（文中に間投助詞、文末は別の語で締める）
     good = ("十年前のあたしはね、まだバスガイドしててさ。"
-            "バスの中で、お客さんに占いを披露してたのよ。"
-            "それが今の特技の原点。あの頃の自分に、言ってやりたいわ。")
+            "バスの中でお客さんに占いを披露してたんだけどさ、それが今の特技の原点でね。"
+            "あの頃の自分に、言ってやりたいわ。"
+            "朝は早かったからさ、始発前から歩いたのよ。"
+            "それでもね、楽しかったの。")
     st2, w2 = check(good)
     assert not w2, f"健全な文で警告が出た: {w2} {st2}"
     print("★gobi: 通った")
