@@ -226,6 +226,15 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool,
             #   下手なものを上書きせず、何も作らずに正常終了する。
             log.warning("おたよりは作らない。パスAのフォールバック版が流れる")
             return 0
+        # ★★★フォールバックに倒れたことを**目立たせる**（2026-09-18 追加）。
+        #   9/16・9/17、台本が max_tokens で打ち切られてフォールバック番組が
+        #   2日続けて放送されたのに、**3日間気づけなかった**。
+        #   ジョブは緑（フォールバックは成功扱い）、納品も正常、ログのERRORは
+        #   誰も見ない——**静かに劣化する形**だった。
+        #   ⚠ 番組は止めない（フォールバックは番組を守る仕組みなので正しく働いている）。
+        #     ただし「今日はフォールバックだった」は**必ず人に届く形**にする。
+        print("::warning title=★台本生成に失敗・フォールバック番組が放送されます::"
+              f"{e}")
         from runner import fallback
         script = fallback.build(pack)
     (outdir / f"script_{pass_name}.md").write_text(script, encoding="utf-8")
