@@ -163,6 +163,19 @@ def pick_traffic_episode(day: datetime.date) -> str:
     return eps[(day.toordinal() * 3001) % len(eps)]
 
 
+def pick_traffic_place(day: datetime.date) -> str:
+    """思い出の舞台（2026-09-23）。放っておくと「九州の山道」に寄る。
+    素数を種(3001)と別にして、種×地名×教訓の組み合わせが毎日ずれるようにする。"""
+    xs = _tbl()["traffic_places"]
+    return xs[(day.toordinal() * 1009) % len(xs)]
+
+
+def pick_traffic_moral(day: datetime.date) -> str:
+    """締めの一言の方向性（2026-09-23）。放っておくと「焦らないのが一番」に寄る。"""
+    xs = _tbl()["traffic_morals"]
+    return xs[(day.toordinal() * 2011) % len(xs)]
+
+
 # ---------------------------------------------------------------- chat filter
 _NG_WORD = ("http://", "https://", "www.", "@")
 # 「こずえに◯◯と言わせる」系＝放送への注入。LLMに判断させず、コード側で先に落とす
@@ -515,7 +528,10 @@ PROMPT_A = """あなたはネットラジオ局 CEBDR24 の放送作家であり
      ★★**思い出は datapack.traffic_episode の場面を種にする**（2026-09-23）。
      ⚠ **思い出の中で天気・雨・霧・雪・視界の話をしない**（天気は(1)の注意だけで触れる）。
        先週は雨の6日間すべてで「霧で前が真っ白になった」という同じ話をしてしまい、
-       リスナーから「言い方が違うだけで毎日同じ」と指摘された。場所（地名）は自由に選んでよい
+       リスナーから「言い方が違うだけで毎日同じ」と指摘された。
+     ★★**舞台は datapack.traffic_place**、**締めの一言は datapack.traffic_moral の方向で**自分の言葉にする
+       （そのまま読み上げない）。⚠「焦らないのが一番」「無理に急がない」は使わない
+       （放っておくと毎日この締めになり、場所も「九州の山道」に寄っていた）
   (3)公式で確認してねの締め。要素を省略しない。
 
 [sa] ⑤' 今日のサービスエリア。交通情報から続けて、こずえの元バスガイド経験が一番出るコーナー。
@@ -749,6 +765,8 @@ def build_pack(day: datetime.date, log, traffic_live: bool) -> dict:
         "theme_of_today": pick_theme(day),
         "uranai_angle": pick_uranai_angle(day),
         "traffic_episode": pick_traffic_episode(day),
+        "traffic_place": pick_traffic_place(day),
+        "traffic_moral": pick_traffic_moral(day),
         "sa_of_today": v1.collect_sa(day, log),
         # ★ニュースは v2/news.py が3レーン（サイバー演歌／AI／ほっこり）から1本ずつ拾う。
         #   取れなければ None。台本側は「無ければ触れない」で処理する（番組は落とさない）。
