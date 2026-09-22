@@ -14,7 +14,11 @@ import re
 import sys
 from collections import Counter
 
-# 語尾の型。★上から順に判定する（「のよね」は「ね」ではなく「のよね」に数えたいので順序が意味を持つ）
+# 語尾の型。★上から順に判定する。
+# ⚠ 2026-09-23 訂正: 以前ここに「のよねはねではなくのよねに数えたい」と書いてあったが、
+#   実際は「〜ね」が先なので**のよねは〜ねに数えていた**。検討の結果こちらを正とする
+#   （「〜ね」は全体の1/4まで、のルールに「のよね」も含める。耳で聞いて語尾が「ね」であることは同じ）。
+#   締めの4形のバランスは下の SHIME で別に数える。
 PATS = [
     ("〜ね", re.compile(r"ね[。！]?$")),
     ("〜のよ/わよ/わね", re.compile(r"(のよ|わよ|わね|のよね)[。！]?$")),
@@ -24,6 +28,15 @@ PATS = [
     ("〜の", re.compile(r"の[。！]?$")),
 ]
 NE_MAX_RATIO = 0.35     # 「〜ね」がこれを超えたら警告（9/5の実測31%が健全な例）
+
+# ★★★締めの4形（2026-09-23 nordw「のよ・のよね・のを混ぜる。わも使うが一番少なく」）。
+#   実測: 「〜のよ。」は語尾で大きく上がり、「〜の。」は下がる（本番と同じ声で合成して測った）。
+#   全部「のよ」だと全部が「教えてあげる」調になる。9/18・9/19は「わ」が「のよ」と同数以上。
+#   ⚠ 判定順が意味を持つ: のよね → のよ → わ → の
+SHIME = [("のよね", re.compile(r"のよね[。！]$")), ("のよ", re.compile(r"のよ[。！]$")),
+         ("わ", re.compile(r"わ[。！]$")), ("の", re.compile(r"の[。！]$"))]
+SHIME_MIN = 6           # 締めの3形（のよ・のよね・の）がこれ未満の台本は判定しない（少なすぎてブレる）
+SHIME_MAX_SHARE = 0.6   # 3形のうち1つがこれを超えたら偏り
 NE_MAX_RUN = 3          # 同じ語尾がこれだけ続いたら警告
 
 # ★★★文の途中の間投助詞（2026-09-18 追加）。
@@ -61,13 +74,33 @@ def check(text: str) -> tuple[dict, list[str]]:
         run = run + 1 if f else 0
         best = max(best, run)
     ratio = kinds["〜ね"] / len(ss)
+    shime = Counter()
+    # ★句点を残して切り直す。sentences() は句読点を落とすので、「〜の？」（問い）と
+    #   「〜の。」（締め）の区別がつかず、しかも [。！]$ の型に1本も当たらなかった（実測で全部0本）。
+    for s in (x.strip() for x in re.findall(r"[^。！？]+[。！？]", re.sub(r"===SEGMENT: \w+===", "", text))):
+        for name, p in SHIME:
+            if p.search(s):
+                shime[name] += 1
+                break
+    three = shime["のよ"] + shime["のよね"] + shime["の"]
     naka = len(NAKA.findall(text))
     naka_per100 = 100 * naka / len(ss)
     stats = {"n": len(ss), "ne": kinds["〜ね"], "ne_ratio": ratio,
              "ne_run": best, "kinds": dict(kinds),
              "naka": naka, "naka_per100": naka_per100,
              "avg_len": sum(len(s) for s in ss) / len(ss)}
+    stats["shime"] = dict(shime)
     warns = []
+    if three >= SHIME_MIN:
+        top = max(("のよ", "のよね", "の"), key=lambda k: shime[k])
+        if shime[top] / three > SHIME_MAX_SHARE:
+            warns.append(f"締めが「〜{top}。」に偏っている（のよ{shime['のよ']}/のよね{shime['のよね']}/"
+                         f"の{shime['の']}）。3つを混ぜる")
+        missing = [k for k in ("のよ", "のよね", "の") if shime[k] == 0]
+        if missing:
+            warns.append(f"締めに「〜{'。」「〜'.join(missing)}。」が1本もない。のよ・のよね・のを混ぜる")
+        if shime["わ"] > min(shime["のよ"], shime["のよね"], shime["の"]):
+            warns.append(f"「〜わ。」が{shime['わ']}本で多すぎる（4つの締めの中で一番少なくする）")
     if naka_per100 < NAKA_MIN_PER_100:
         warns.append(f"文の途中の間投助詞（〜でね、〜だけどさ）が{naka}回しかない"
                      f"（100文あたり{naka_per100:.1f}回。目安は{NAKA_MIN_PER_100}回以上）。"
@@ -107,7 +140,7 @@ if __name__ == "__main__":
         st, w = check(Path(p).read_text(encoding="utf-8"))
         print(f"\n=== {Path(p).name} ===")
         print(f"  文{st['n']}本 平均{st['avg_len']:.1f}字 "
-              f"「〜ね」{st['ne']}本({st['ne_ratio']:.0%}) 最長連続{st['ne_run']}")
+              f"「〜ね」{st['ne']}本({st['ne_ratio']:.0%}) 最長連続{st['ne_run']} 締め{st.get('shime', {})}")
         print(f"  内訳: {st['kinds']}")
         for x in w:
             print(f"  ★{x}")
