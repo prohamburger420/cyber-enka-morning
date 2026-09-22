@@ -47,6 +47,7 @@ NE_MAX_RUN = 3          # 同じ語尾がこれだけ続いたら警告
 #   ⚠ 文末だけ数えていたから気づけなかった。**測っていない軸は壊れていても分からない。**
 NAKA = re.compile(r"(でね|ててね|てね|けどね|からね|のにね|だけどさ|けどさ|でさ|てさ|"
                   r"からさ|なってね|ちゃってさ)、")
+KIRI = re.compile(r"(?:(?<=[てで])さ|(?<!んで)(?<!ないで)(?<=で)ね)。")   # 文末で切る形（お願いの「読んでね」「忘れないでね」は除く）
 NAKA_MIN_PER_100 = 4    # 100文あたりこれを下回ったら警告（実測0〜1回＝出ていない状態）
 
 
@@ -83,7 +84,10 @@ def check(text: str) -> tuple[dict, list[str]]:
                 shime[name] += 1
                 break
     three = shime["のよ"] + shime["のよね"] + shime["の"]
-    naka = len(NAKA.findall(text))
+    # ★2026-09-23: 文末で一度切る「〜の話でね。」「〜があってさ。」も数える。
+    #   「、」でつなぐ形と聴き比べて、nordw「切ったほうが自然」。**どちらもね・さを使えている**。
+    #   以前は「、」の形しか数えず、毎朝「1回しかない」と誤った警告を出していた。
+    naka = len(NAKA.findall(text)) + len(KIRI.findall(text))
     naka_per100 = 100 * naka / len(ss)
     stats = {"n": len(ss), "ne": kinds["〜ね"], "ne_ratio": ratio,
              "ne_run": best, "kinds": dict(kinds),
@@ -102,7 +106,7 @@ def check(text: str) -> tuple[dict, list[str]]:
         if shime["わ"] > min(shime["のよ"], shime["のよね"], shime["の"]):
             warns.append(f"「〜わ。」が{shime['わ']}本で多すぎる（4つの締めの中で一番少なくする）")
     if naka_per100 < NAKA_MIN_PER_100:
-        warns.append(f"文の途中の間投助詞（〜でね、〜だけどさ）が{naka}回しかない"
+        warns.append(f"「〜でね」「〜てさ」のつなぎが{naka}回しかない"
                      f"（100文あたり{naka_per100:.1f}回。目安は{NAKA_MIN_PER_100}回以上）。"
                      f"文末にだけ「ね」「さ」を置いていないか")
     if ratio > NE_MAX_RATIO:
