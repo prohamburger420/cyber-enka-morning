@@ -175,8 +175,39 @@ def _api(path: str, **params) -> dict:
         return json.loads(r.read().decode("utf-8"))
 
 
+# ★★既知の配信ID（2026-10-05）。CEBDR24は2025-11-13から**同じ動画1本**で24時間配信している
+#   （9/28〜10/3の chat_live.json の video_id はすべてこれ、10/5 17時に isLiveNow=true を確認）。
+#   10/4・10/5の朝6回、search.list(eventType=live) がこの配信を返さず「配信中のライブが無い」→
+#   **チャット収集がまるごと止まった**（そのとき同じIDが配信中だったかは未確認。検索の取りこぼしか、
+#   一時的な配信停止かは区別できていない）。どちらでも効くよう、**既知IDの生存確認を先に**行う。
+#   videos.list は1ユニット（search は100）。環境変数 YT_VIDEO_ID で差し替え可能。
+# ponytail: 既知IDは定数。配信が別の動画IDに切り替わったら search 経路で拾う（ログに出る）ので、
+#   そのときここを新しいIDに書き換える
+KNOWN_VIDEO_ID = os.environ.get("YT_VIDEO_ID") or "o2E50roMd3g"
+
+
+def _live_chat_id(video_id: str) -> str | None:
+    """その動画がいまライブ中で、チャットが開いていれば liveChatId を返す。"""
+    v = _api("videos", part="liveStreamingDetails", id=video_id)
+    items = v.get("items", [])
+    if not items:
+        return None
+    d = items[0].get("liveStreamingDetails", {})
+    if d.get("actualEndTime"):
+        return None
+    return d.get("activeLiveChatId")
+
+
 def resolve_live_api(channel_id: str = CHANNEL_ID) -> str | None:
-    """公式APIで「いま配信中」の動画IDを引く（search.list=100ユニット）。"""
+    """公式APIで「いま配信中」の動画IDを引く。①既知IDの生存確認（1ユニット）→ ②search（100ユニット）。
+    ★どちらの経路で見つけたかを必ずログに出す（直ったかどうかを翌朝ログ1行で確かめるため）。"""
+    try:
+        if _live_chat_id(KNOWN_VIDEO_ID):
+            print(f"解決経路: 既知ID {KNOWN_VIDEO_ID} を videos.list で確認（ライブ中・チャット有効）", flush=True)
+            return KNOWN_VIDEO_ID
+        print(f"★既知ID {KNOWN_VIDEO_ID} はライブ中ではない → search にフォールバック", file=sys.stderr)
+    except Exception as e:
+        print(f"★既知IDの確認に失敗: {type(e).__name__}: {e} → search にフォールバック", file=sys.stderr)
     try:
         r = _api("search", part="id", channelId=channel_id,
                  eventType="live", type="video", maxResults=1)
@@ -184,7 +215,10 @@ def resolve_live_api(channel_id: str = CHANNEL_ID) -> str | None:
         if not items:
             print("★API: このチャンネルに配信中のライブが無い", file=sys.stderr)
             return None
-        return items[0]["id"]["videoId"]
+        vid = items[0]["id"]["videoId"]
+        print(f"解決経路: search で {vid} を発見"
+              + ("" if vid == KNOWN_VIDEO_ID else f"（★既知ID {KNOWN_VIDEO_ID} と違う。配信が切り替わった可能性）"), flush=True)
+        return vid
     except Exception as e:
         print(f"★APIでの解決に失敗: {type(e).__name__}: {e}", file=sys.stderr)
         return None
