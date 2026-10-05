@@ -252,6 +252,16 @@ def run(pass_name: str, day: datetime.date, no_audio: bool, traffic_live: bool,
     from v2 import yomi_check
     yomi_check.write(segs, outdir.resolve(), log)
 
+    # ★「次の回でも読む」等、守れない約束を言っていないか（2026-10-05）。
+    #   受付後の書き込みを持ち越す仕組みは無い（nordw判断で約束のほうを消した）。自動では直さず警告だけ出す。
+    import re as _re
+    for _name, _body in segs:
+        _m = _re.search(r"(次の回|次回)[^。！？\n]{0,8}読む|(?<!曲目の)(あとで|後で)読む|また[^。！？\n]{0,4}読む", _body)
+        if _m:
+            print(f"::warning title=★守れない約束を言っている（{_name}）::「{_m.group(0)}」"
+                  "受付後の書き込みを次の回で読む仕組みは無い")
+            log.warning("★守れない約束: %s 「%s」", _name, _m.group(0))
+
     # ★★読みの二重チェック（2026-09-10）。pyopenjtalk と UniDic で読ませて、
     #   **食い違ったところだけ**知らせる。きっかけは「急がば回れ」が
     #   **キューガバマワレ**と読まれて 9/7 の放送に乗っていたこと。
