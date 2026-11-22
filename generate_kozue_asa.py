@@ -147,7 +147,7 @@ def collect_weather(log: logging.Logger, day=None) -> dict:
     return out
 
 
-UA = "kozue-asa-radio/1.0 (daily 05:00 JST; contact: abototanigami@gmail.com)"
+UA = "kozue-asa-radio/1.0"  # 個人の連絡先は入れない（毎朝外部APIに送られるため）
 IH_AREA = {"area01": "北海道", "area02": "東北", "area03": "北陸・信越",
            "area04": "関東", "area05": "東海", "area06": "関西",
            "area07": "中国", "area08": "四国", "area09": "九州・沖縄"}
