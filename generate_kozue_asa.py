@@ -29,6 +29,8 @@ import re
 import shutil
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -109,8 +111,22 @@ def collect_weather(log: logging.Logger, day=None) -> dict:
         f"&timezone=Asia%2FTokyo{span}"
     )
     log.info("weather GET (全国%d地点) %s", len(REGIONS), url)
-    with urllib.request.urlopen(url, timeout=15) as r:
-        data = json.loads(r.read().decode("utf-8"))
+    # ★1発勝負をやめる（2026-11-22）。SSLタイムアウト（11/14・11/18）と 429（11/22）で
+    #   **ここが落ちると番組ごと落ちていた**。間を空けて取り直す。
+    # ponytail: 固定の待ち3回、それでも落ちる日が続くなら天気抜きで番組を出すフォールバックを足す
+    waits = [0, 30, 90, 180]
+    for i, w in enumerate(waits):
+        if w:
+            log.warning("weather 取り直し %d回目（%d秒待つ）", i, w)
+            time.sleep(w)
+        try:
+            with urllib.request.urlopen(url, timeout=30) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            break
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            log.warning("weather 失敗 (%d/%d): %s", i + 1, len(waits), e)
+            if i == len(waits) - 1:
+                raise
     if isinstance(data, dict):  # 1地点だと配列にならない
         data = [data]
     regions = []

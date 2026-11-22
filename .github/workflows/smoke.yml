@@ -49,14 +49,21 @@ jobs:
           #   torchaudio を最新にすると `torchaudio.load` が TorchCodec を要求して落ちる
           #   （2026-09-05 実測: ImportError: TorchCodec is required for load_with_torchcodec）。
           #   「最新で動くはず」ではなく「動いた版で動かす」。
+          # ★★torch を制約ファイルで**全部のpipに**固定する（2026-11-22）。
+          #   x-transformers 2.32.0（11/18公開）が assoc-scan → accelerated-scan 経由で
+          #   torch>=2.9 を要求し、pip が torch を 2.15 に上げた → torchaudio 2.8 が
+          #   libtorchaudio.so を読めず**音声0本で11/19〜21の番組が全滅**。コードは無変更、外が変わった。
+          #   -c を付けると pip は torch を上げずに、上げを要求する側を古い版に下げて解く。
+          echo torch==2.8.0 > pin.txt && echo torchaudio==2.8.0 >> pin.txt
           pip install -q torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
           # ★onnxruntime-gpu は要求ファイルに入っているがCPUランナーでは不要（巨大）。
           #   grep で外してからインストールする。
           # ★torchaudio は上で固定済み。要求ファイルの無印指定に上書きされないよう外す
           grep -vE 'onnxruntime-gpu|^torchaudio' gsv/requirements.txt > req.txt
-          pip install -q -r req.txt
-          pip install -q boto3 'numpy==1.26.4' 'transformers==4.50.0' 'soundfile==0.14.0'
-          python -c "import torch, torchaudio; print('PINNED', torch.__version__, torchaudio.__version__)"
+          pip install -q -c pin.txt -r req.txt
+          pip install -q -c pin.txt boto3 'numpy==1.26.4' 'transformers==4.50.0' 'soundfile==0.14.0'
+          # ★入った版を確かめる。違えば**ここで**落とす（合成まで行って音声0本で気づくのでは遅い）
+          python -c "import torch, torchaudio; v=(torch.__version__, torchaudio.__version__); print('PINNED', *v); assert all(x.startswith('2.8.0') for x in v), v"
           echo "DEPS_SEC=$(( $(date +%s) - S ))"
 
       # ★モデルは1.3GB。毎回落とすと遅いのでキャッシュする（Actionsのキャッシュは10GBまで）

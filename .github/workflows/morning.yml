@@ -149,9 +149,15 @@ jobs:
         run: |
           # ★版はローカルの動作確認済みに固定する。torchaudio を上げると
           #   torchaudio.load が TorchCodec を要求して落ちる（2026-09-05 実測）
+          # ★★torch を制約ファイルで**全部のpipに**固定する（2026-11-22）。
+          #   x-transformers 2.32.0（11/18公開）が assoc-scan → accelerated-scan 経由で
+          #   torch>=2.9 を要求し、pip が torch を 2.15 に上げた → torchaudio 2.8 が
+          #   libtorchaudio.so を読めず**音声0本で11/19〜21の番組が全滅**。コードは無変更、外が変わった。
+          #   -c を付けると pip は torch を上げずに、上げを要求する側を古い版に下げて解く。
+          echo torch==2.8.0 > pin.txt && echo torchaudio==2.8.0 >> pin.txt
           pip install -q torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
           grep -vE 'onnxruntime-gpu|^torchaudio' gsv/requirements.txt > req.txt
-          pip install -q -r req.txt
+          pip install -q -c pin.txt -r req.txt
           # ⚠★★yt-dlp を忘れていた（2026-09-06 発覚）。chat_collect.py は
           #   「いま配信中の動画ID」を **yt-dlpのCLI** で引く。入っていないので
           #   FileNotFoundError → 握りつぶし → 「配信中の動画が見つからない」。
@@ -159,10 +165,12 @@ jobs:
           # ★fugashi/unidic-lite は読みの二重チェック用（v2/yomi_diff.py）。
           #   pyopenjtalk が「急がば」を**キューガバ**と読んで放送に乗った（9/7）ので、
           #   別の辞書と突き合わせて食い違いを警告する。無くても番組は動く。
-          pip install -q boto3 anthropic pytchat yt-dlp fugashi unidic-lite 'numpy==1.26.4' 'transformers==4.50.0' 'soundfile==0.14.0'
+          pip install -q -c pin.txt boto3 anthropic pytchat yt-dlp fugashi unidic-lite 'numpy==1.26.4' 'transformers==4.50.0' 'soundfile==0.14.0'
           # ★ffmpegと同じ轍を踏まないよう、**入ったことをここで確かめる**。
           #   （`|` を使わない。パイプの終了コードは右側のものになる）
           command -v yt-dlp
+          # ★入った版を確かめる。違えば**ここで**落とす（合成まで行って音声0本で気づくのでは遅い）
+          python -c "import torch, torchaudio; v=(torch.__version__, torchaudio.__version__); print('PINNED', *v); assert all(x.startswith('2.8.0') for x in v), v"
 
       # ★★BGMのミックスに ffmpeg/ffprobe が要る（2026-09-05 実測）。
       #   ⚠ **ubuntu-latest には入っていない。** 「入っているはず」で書いて落ちた。
